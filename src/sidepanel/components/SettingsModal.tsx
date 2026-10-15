@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AIProvider, Locale, ThemeMode } from '../../shared/types';
+import type { AIProvider, AutonomousRecoverySettings, Locale, ThemeMode } from '../../shared/types';
 import { ALL_PROVIDERS } from '../../shared/providerSelection';
 import { AI_PROVIDERS } from '../../shared/constants';
 import { getHackMDToken, setHackMDToken, clearHackMDToken } from '../../shared/hackmd';
@@ -8,12 +8,16 @@ import { THEME_MODES } from '../../shared/theme';
 import { includesMetaOrigin, META_ORIGINS } from '../../shared/metaOrigins';
 import { planMetaHostPermission } from '../metaHostPermission';
 
+const DEFAULT_AUTONOMOUS_RECOVERY: AutonomousRecoverySettings = { enabled: false, policy: 'safe' };
+
 interface Props {
   isOpen: boolean;
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
   theme: ThemeMode;
   onThemeChange: (theme: ThemeMode) => void;
+  autonomousRecovery?: AutonomousRecoverySettings;
+  onAutonomousRecoveryChange?: (settings: AutonomousRecoverySettings) => void;
   standbyProvider: AIProvider;
   onStandbyChange: (provider: AIProvider) => Promise<void>;
   providerSelectionDisabled: boolean;
@@ -27,7 +31,9 @@ interface SettingsSession {
   closeTimer?: number;
 }
 
-export default function SettingsModal({ isOpen, locale, onLocaleChange, theme, onThemeChange, standbyProvider, onStandbyChange, providerSelectionDisabled, onClose }: Props) {
+export default function SettingsModal({ isOpen, locale, onLocaleChange, theme, onThemeChange, autonomousRecovery, onAutonomousRecoveryChange, standbyProvider, onStandbyChange, providerSelectionDisabled, onClose }: Props) {
+  const recovery = autonomousRecovery ?? DEFAULT_AUTONOMOUS_RECOVERY;
+  const updateRecovery = onAutonomousRecoveryChange ?? (() => {});
   const [token, setToken] = useState('');
   const [tokenState, setTokenState] = useState<TokenState>('loading');
   const [tokenErrorKey, setTokenErrorKey] = useState('');
@@ -238,6 +244,29 @@ export default function SettingsModal({ isOpen, locale, onLocaleChange, theme, o
         <select id="theme-select" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeMode)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-hidden focus:border-sky-400">
           {THEME_MODES.map((mode) => <option key={mode} value={mode}>{t(`settings.theme.${mode}`)}</option>)}
         </select>
+
+        <section className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3" aria-labelledby="recovery-settings-title">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 id="recovery-settings-title" className="text-xs font-semibold text-slate-700">{t('settings.recovery')}</h3>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">{t('settings.recovery.help')}</p>
+            </div>
+            <label className="flex items-center gap-1.5 text-xs font-medium text-slate-700" htmlFor="recovery-enabled">
+              <input id="recovery-enabled" type="checkbox" checked={recovery.enabled}
+                onChange={(event) => updateRecovery({ ...recovery, enabled: event.target.checked })} />
+              {t('settings.recovery.enabled')}
+            </label>
+          </div>
+          <label className="mt-2 block text-xs font-medium text-slate-700" htmlFor="recovery-policy">{t('settings.recovery.policy')}</label>
+          <select id="recovery-policy" value={recovery.policy}
+            disabled={!recovery.enabled}
+            onChange={(event) => updateRecovery({ ...recovery, policy: event.target.value as AutonomousRecoverySettings['policy'] })}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-hidden focus:border-sky-400 disabled:opacity-50">
+            <option value="safe">{t('settings.recovery.safe')}</option>
+            <option value="strict">{t('settings.recovery.strict')}</option>
+            <option value="best-effort">{t('settings.recovery.best_effort')}</option>
+          </select>
+        </section>
 
         <label className="mt-4 block text-xs font-semibold text-slate-700" htmlFor="standby-provider">{t('settings.standby')}</label>
         <select

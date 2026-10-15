@@ -1,5 +1,33 @@
 import { createContentScript } from './base';
 
+function isVisible(element: Element): boolean {
+  if (!(element instanceof HTMLElement)) return true;
+  const style = window.getComputedStyle(element);
+  return style.display !== 'none' && style.visibility !== 'hidden'
+    && !(style.opacity !== '' && Number(style.opacity) === 0)
+    && element.getClientRects().length > 0;
+}
+
+function isUsableClaudeComposer(element: Element): boolean {
+  const editable = element.getAttribute('contenteditable') === 'true'
+    || (element as HTMLElement).isContentEditable;
+  if (!editable || !isVisible(element)) return false;
+  if ((element as HTMLInputElement).disabled || element.getAttribute('aria-disabled') === 'true') return false;
+  if (element.closest('[inert], [aria-hidden="true"]')) return false;
+  // Claude's supported composer is ProseMirror. The fieldset fallback covers
+  // the normal composer wrapper without accepting an arbitrary page editor.
+  return element.matches('.ProseMirror[contenteditable="true"], [contenteditable="true"].ProseMirror')
+    || Boolean(element.closest('fieldset'));
+}
+
+function isClaudeSendControl(element: Element): boolean {
+  if (!element.matches('button') || !isVisible(element)) return false;
+  if ((element as HTMLButtonElement).disabled || element.getAttribute('aria-disabled') === 'true') return false;
+  const label = element.getAttribute('aria-label') ?? '';
+  return label === 'Send Message' || label === 'Send message' || label === 'Send'
+    || Boolean(element.closest('fieldset'));
+}
+
 createContentScript({
   provider: 'claude',
 
@@ -11,6 +39,9 @@ createContentScript({
     // Fallback
     'fieldset div[contenteditable="true"]',
   ],
+  requireVisibleInput: true,
+  inputFilter: isUsableClaudeComposer,
+  preserveExistingDraft: true,
 
   sendButtonSelectors: [
     'button[aria-label="Send Message"]',
@@ -19,6 +50,7 @@ createContentScript({
     // The send button is often the last button in the input area
     'fieldset button[type="button"]:last-of-type',
   ],
+  sendButtonFilter: isClaudeSendControl,
 
   responseSelectors: [
     // Claude response containers (actual class: font-claude-response)
@@ -37,10 +69,11 @@ createContentScript({
   ],
 
   loginDetector: () => {
-    return !!(
+    // Missing markup can mean loading, navigation or usage gating, not logout.
+    return (
       document.querySelector('.ProseMirror[contenteditable="true"]') ||
       document.querySelector('[contenteditable="true"].ProseMirror')
-    );
+    ) ? true : null;
   },
 
   // Detect if Claude is still generating (streaming indicator or stop button)

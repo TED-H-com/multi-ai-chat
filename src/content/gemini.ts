@@ -1,35 +1,37 @@
 import { createContentScript } from './base';
+import { injectGeminiInput, readGeminiComposerText, geminiComposerMatches } from './geminiInput';
+import {
+  GEMINI_INPUT_SELECTORS,
+  GEMINI_SEND_SELECTORS,
+  GEMINI_STOP_SELECTORS,
+  isUsableGeminiComposerInput,
+  isGeminiSendControl,
+  isGeminiStopControl,
+  isVisibleGeminiElement,
+} from './geminiDom';
+
+function hasVisibleElement(selectors: readonly string[], filter: (element: Element) => boolean = () => true): boolean {
+  return Array.from(document.querySelectorAll(selectors.join(', ')))
+    .some(element => isVisibleGeminiElement(element) && filter(element));
+}
 
 createContentScript({
   provider: 'gemini',
 
-  inputSelectors: [
-    // Gemini uses a rich text editor
-    '.ql-editor[contenteditable="true"]',
-    'rich-textarea .ql-editor',
-    // Newer Gemini input
-    'div[contenteditable="true"][aria-label="Enter a prompt here"]',
-    'div[contenteditable="true"][aria-label]',
-    // Generic fallback
-    '.input-area [contenteditable="true"]',
-    'rich-textarea [contenteditable="true"]',
-  ],
+  inputSelectors: GEMINI_INPUT_SELECTORS,
+  requireVisibleInput: true,
+  inputFilter: element => isVisibleGeminiElement(element) && isUsableGeminiComposerInput(element),
+  readInputText: readGeminiComposerText,
+  inputMatchesPrompt: geminiComposerMatches,
+  preserveExistingDraft: true,
+  sendConfirmation: 'single-activation',
+  // The verified click must not wait on a timer: Chrome can defer timers in a
+  // background provider tab, which otherwise leaves a valid draft unsent until
+  // the user visits Gemini.
+  immediateSendAfterInsertion: true,
 
-  sendButtonSelectors: [
-    'button.send-button',
-    'button[aria-label="Send message"]',
-    'button[aria-label="Send"]',
-    'button[aria-label="傳送訊息"]',
-    'button[aria-label="送出"]',
-    'button[data-mat-icon-name="send"]',
-    // Gemini's send icon button
-    '.send-button-container button',
-    'button mat-icon[data-mat-icon-name="send"]',
-    // Newer Gemini UI patterns
-    '.action-wrapper button[aria-label]',
-    '.input-area-container button.send',
-    'button.send-message-button',
-  ],
+  sendButtonSelectors: GEMINI_SEND_SELECTORS,
+  sendButtonFilter: element => isVisibleGeminiElement(element) && isGeminiSendControl(element),
 
   responseSelectors: [
     // Gemini response containers
@@ -41,66 +43,28 @@ createContentScript({
     '.response-content .markdown',
     '.message-content[data-message-id]',
   ],
+  responseTracking: 'semantic-latest',
 
-  stopButtonSelectors: [
-    'button[aria-label="Stop response"]',
-    'button[aria-label="Stop"]',
-    'button[aria-label="停止回應"]',
-  ],
+  stopButtonSelectors: GEMINI_STOP_SELECTORS,
+  stopButtonFilter: element => isVisibleGeminiElement(element) && isGeminiStopControl(element),
 
   loginDetector: () => {
-    return !!(
-      document.querySelector('.ql-editor[contenteditable="true"]') ||
-      document.querySelector('rich-textarea [contenteditable="true"]') ||
-      document.querySelector('div[contenteditable="true"][aria-label="Enter a prompt here"]')
-    );
+    // Missing markup can mean loading, navigation or usage gating, not logout.
+    return hasVisibleElement(GEMINI_INPUT_SELECTORS, isUsableGeminiComposerInput) ? true : null;
   },
 
   // Detect if Gemini is still generating (thinking indicator or stop button)
   isThinking: () => {
     // Gemini shows a loading/thinking indicator while generating
-    if (document.querySelector('.loading-indicator')) return true;
-    if (document.querySelector('.thinking-indicator')) return true;
-    if (document.querySelector('mat-progress-bar')) return true;
+    if (hasVisibleElement(['.loading-indicator', '.thinking-indicator', 'mat-progress-bar'])) return true;
     // Stop button visible during generation
-    if (document.querySelector('button[aria-label="Stop response"]')) return true;
-    if (document.querySelector('button[aria-label="Stop"]')) return true;
-    if (document.querySelector('button[aria-label="停止回應"]')) return true;
+    if (hasVisibleElement(GEMINI_STOP_SELECTORS, isGeminiStopControl)) return true;
     // Gemini's streaming dots
-    if (document.querySelector('.response-streaming')) return true;
-    if (document.querySelector('[data-test-id="response-loading"]')) return true;
+    if (hasVisibleElement(['.response-streaming', '[data-test-id="response-loading"]'])) return true;
     return false;
   },
 
-  // Gemini rich text editor injection — must trigger Angular change detection
-  injectInput: async (el: Element, text: string) => {
-    const editor = el as HTMLElement;
-    editor.focus();
-
-    // Clear existing content
-    editor.replaceChildren();
-
-    // Convert text to paragraphs (Quill/rich editor needs block elements)
-    const lines = text.split('\n');
-    const fragment = document.createDocumentFragment();
-    for (const line of lines) {
-      const p = document.createElement('p');
-      p.textContent = line || '\u00A0'; // non-breaking space for empty lines
-      fragment.appendChild(p);
-    }
-    editor.appendChild(fragment);
-
-    // Fire events to trigger Angular/Quill change detection
-    editor.dispatchEvent(new Event('input', { bubbles: true }));
-    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-
-    await Promise.resolve();
-    if (!editor.textContent?.trim()) {
-      editor.focus();
-      document.execCommand('insertText', false, text);
-      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-    }
-  },
+  injectInput: injectGeminiInput,
 
   doneDelay: 4000,
   chunkDebounce: 600,

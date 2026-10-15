@@ -8,6 +8,13 @@ interface QueryCapableContainer {
   querySelector(selectors: string): unknown;
 }
 
+interface ChatGptComposerElement extends ClosestCapableElement {
+  tagName: string;
+  isContentEditable?: boolean;
+  disabled?: boolean;
+  readOnly?: boolean;
+}
+
 interface ChatGptTurnElement {
   matches(selectors: string): boolean;
   querySelector(selectors: string): unknown;
@@ -26,6 +33,11 @@ export const CHATGPT_LOGGED_OUT_SELECTORS = [
   'a[href^="/auth/signup"]',
 ];
 
+export const CHATGPT_ACCOUNT_SELECTORS = [
+  'button[data-testid="accounts-profile-button"]',
+  'button[aria-label="Open profile menu"]',
+];
+
 export const CHATGPT_STOP_SELECTORS = [
   '[data-testid="stop-button"]',
   '[data-testid="composer-stop-button"]',
@@ -38,7 +50,7 @@ export const CHATGPT_USER_MESSAGE_SELECTORS = [
   '[data-message-author-role="user"]',
 ];
 
-const EXPLICIT_COMPOSER_SELECTOR = '[data-testid*="composer"], form[data-type="unified-composer"]';
+const EXPLICIT_COMPOSER_SELECTOR = '[data-testid*="composer"], form[data-type="unified-composer"], form[data-chatgpt-composer]';
 const COMPOSER_ACTION_SELECTOR = [
   '[data-testid="send-button"]',
   '#composer-submit-button',
@@ -55,6 +67,12 @@ function isWithinChatGptComposer(element: ClosestCapableElement): boolean {
 
 export function isChatGptComposerInput(element: ClosestCapableElement): boolean {
   return element.id === 'prompt-textarea' || isWithinChatGptComposer(element);
+}
+
+export function isUsableChatGptComposerInput(element: ChatGptComposerElement): boolean {
+  const editable = element.isContentEditable || element.tagName === 'TEXTAREA' || element.tagName === 'INPUT';
+  return isChatGptComposerInput(element) && editable && !element.disabled && !element.readOnly
+    && !element.closest('[inert], [disabled], [readonly], [data-disabled="true"], [aria-disabled="true"], [aria-readonly="true"], [aria-hidden="true"]');
 }
 
 export function isChatGptSendControl(element: ClosestCapableElement): boolean {

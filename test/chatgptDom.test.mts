@@ -14,10 +14,12 @@ interface FakeElement {
   id: string;
   visible: boolean;
   inExplicitComposer: boolean;
+  inCurrentComposerForm: boolean;
   inForm: boolean;
   formHasComposerControl: boolean;
   formHasGenericSend: boolean;
   testId: string | null;
+  attributes: Record<string, string>;
   closest(selectors: string): unknown;
   getAttribute(name: string): string | null;
 }
@@ -27,11 +29,14 @@ function fakeElement(options: Partial<FakeElement> = {}): FakeElement {
     id: '',
     visible: true,
     inExplicitComposer: false,
+    inCurrentComposerForm: false,
     inForm: false,
     formHasComposerControl: false,
     formHasGenericSend: false,
     testId: null,
+    attributes: {},
     closest: (selectors) => {
+      if (selectors.includes('form[data-chatgpt-composer]') && element.inCurrentComposerForm) return {};
       if (selectors.includes('[data-testid*="composer"]')) {
         return element.inExplicitComposer ? {} : null;
       }
@@ -45,7 +50,7 @@ function fakeElement(options: Partial<FakeElement> = {}): FakeElement {
       }
       return null;
     },
-    getAttribute: (name) => name === 'data-testid' ? element.testId : null,
+    getAttribute: (name) => name === 'data-testid' ? element.testId : element.attributes[name] ?? null,
   };
   return Object.assign(element, options);
 }
@@ -67,6 +72,19 @@ test('ChatGPT input lookup skips a hidden legacy prompt and an unrelated ProseMi
 
   assert.strictEqual(selected, composerEditor);
   assert.equal(isChatGptComposerInput(editFormEditor), false);
+});
+
+test('the current ChatGPT composer form admits its editor but a marker-only editor stays unrecognized', () => {
+  assert.equal(isChatGptComposerInput(fakeElement({
+    inCurrentComposerForm: true,
+    attributes: { 'data-composer-markdown': '', role: 'textbox' },
+  })), true);
+  assert.equal(isChatGptComposerInput(fakeElement({
+    attributes: { 'data-composer-markdown': '', role: 'textbox' },
+  })), false);
+  assert.equal(isChatGptComposerInput(fakeElement({
+    attributes: { role: 'textbox' },
+  })), false);
 });
 
 test('generic visible Stop controls outside the composer are ignored', () => {

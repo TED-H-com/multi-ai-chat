@@ -112,20 +112,28 @@ export const DEFAULT_ROUNDTABLE_ROLES: RoundtableRoles = {
 
 // === Prompt Templates for Serial Modes ===
 
+function userTaskReference(question: string): string {
+  return `--- User task and conversation context ---\n${question}\n--- End user task and conversation context ---`;
+}
+
+function aiResponseReference(label: string, response: string): string {
+  return `--- AI reference: ${label} ---\n${response}\n--- End AI reference: ${label} ---`;
+}
+
 export const PROMPTS = {
   debate: {
     pro: (question: string) =>
-      `請從支持、贊同的角度回答以下問題，提出你最強的論點：\n\n${question}`,
+      `Answer the following question from a supporting perspective. Present your strongest arguments.\n\n${userTaskReference(question)}`,
     con: (question: string, proResponse: string) =>
-      `使用者問了：「${question}」\n\n正方提出了以下觀點：\n${proResponse}\n\n請從反方的角度，針對以上正方觀點提出反駁，指出其論點的弱點和盲點。`,
+      `${userTaskReference(question)}\n\n${aiResponseReference('Supporting arguments', proResponse)}\n\nTake the opposing perspective. Challenge the supporting arguments above and identify their weaknesses and blind spots.`,
     judge: (question: string, proResponse: string, conResponse: string) =>
-      `使用者問了：「${question}」\n\n正方觀點：\n${proResponse}\n\n反方觀點：\n${conResponse}\n\n你是判官。請不要選邊站，而是：\n1. 分別評論正反兩方論點的邏輯強度與弱點\n2. 指出雙方論述中被忽略的盲點或隱含假設\n3. 列出哪些爭議是真分歧、哪些只是語義或角度差異\n4. 給出這場辯論目前的焦點在哪\n\n你的工作不是下結論，而是把論點的結構梳理清楚，讓後面的總結方能站在更高的視角收斂。`,
+      `${userTaskReference(question)}\n\n${aiResponseReference('Supporting arguments', proResponse)}\n\n${aiResponseReference('Opposing arguments', conResponse)}\n\nYou are the judge. Do not take sides. Instead:\n1. Evaluate the logical strengths and weaknesses of both sides\n2. Identify overlooked blind spots and implicit assumptions\n3. Distinguish substantive disagreements from differences in wording or perspective\n4. Identify the debate's current focus\n\nYour task is to clarify the structure of the arguments rather than deliver a final conclusion, so the summarizer can synthesize them from a broader perspective.`,
     summary: (question: string, proResponse: string, conResponse: string, judgeResponse: string) =>
-      `使用者問了：「${question}」\n\n正方觀點：\n${proResponse}\n\n反方觀點：\n${conResponse}\n\n判官評論：\n${judgeResponse}\n\n請綜合正反雙方的論點與判官的評析，指出各自的優缺點，並補上你自己的觀點和結論。`,
+      `${userTaskReference(question)}\n\n${aiResponseReference('Supporting arguments', proResponse)}\n\n${aiResponseReference('Opposing arguments', conResponse)}\n\n${aiResponseReference('Judge assessment', judgeResponse)}\n\nSynthesize both sides and the judge's assessment. Explain their respective strengths and weaknesses, and add your own perspective and conclusion.`,
   },
   consult: {
-    first: (question: string) => question,
-    second: (question: string) => question,
+    first: (question: string) => userTaskReference(question),
+    second: (question: string) => userTaskReference(question),
     reviewer: (
       question: string,
       firstResponse: string,
@@ -133,7 +141,7 @@ export const PROMPTS = {
       secondResponse: string,
       secondName: string,
     ) =>
-      `使用者問了：「${question}」\n\n${firstName} 的回答：\n${firstResponse}\n\n${secondName} 的回答：\n${secondResponse}\n\n請檢查兩人說的對不對，對比他們的差異，指出誰的觀點更完整，有沒有遺漏或錯誤。也請你做些研究，補上你自己的答案。`,
+      `${userTaskReference(question)}\n\n${aiResponseReference(`${firstName} answer`, firstResponse)}\n\n${aiResponseReference(`${secondName} answer`, secondResponse)}\n\nCheck the accuracy of both answers and compare their differences. Identify which perspective is more complete and whether either answer has omissions or errors. Research the question as well and add your own answer.`,
     summary: (
       question: string,
       firstResponse: string,
@@ -143,7 +151,7 @@ export const PROMPTS = {
       reviewerResponse: string,
       reviewerName: string,
     ) =>
-      `使用者問了：「${question}」\n\n${firstName} 的回答：\n${firstResponse}\n\n${secondName} 的回答：\n${secondResponse}\n\n${reviewerName} 的審查：\n${reviewerResponse}\n\n請綜合以上三位的回答，找出共識與分歧，總結他們的說法，並做點研究補上你自己的最終答案。`,
+      `${userTaskReference(question)}\n\n${aiResponseReference(`${firstName} answer`, firstResponse)}\n\n${aiResponseReference(`${secondName} answer`, secondResponse)}\n\n${aiResponseReference(`${reviewerName} review`, reviewerResponse)}\n\nSynthesize all three contributions. Identify agreement and disagreement, summarize their positions, and do further research to add your own final answer.`,
   },
   roundtable: {
     /**
@@ -163,24 +171,24 @@ export const PROMPTS = {
       history: { name: string; round: number; text: string }[]
     ): string => {
       const roundInstructions: Record<number, string> = {
-        1: `你是 ${speakerName}。這是一場五輪辯證，四位 AI 輪流發言，目標是「真理越辯越明」。\n\n【第一輪・開場立論】\n請針對以下議題，提出你獨特的觀點和立場。選一個你最有信心的角度深入闘述，不要試圖面面俱到。\n\n要求：有明確立場、有具體論據、有邏輯推演。請精煉你的論點（建議 300-500 字）。`,
+        1: `You are ${speakerName}. This is a five-round debate with four AI participants speaking in turn. The goal is to clarify the truth through debate.\n\nRound 1: Opening position\nPresent your distinct perspective and position on the topic below. Develop the angle you are most confident about rather than trying to cover every aspect.\n\nRequirements: a clear position, concrete evidence, and logical reasoning. Keep your argument concise (around 300-500 characters, or a comparable length in the intended response language).`,
 
-        2: `你是 ${speakerName}。\n\n【第二輪・交叉質疑】\n請仔細讀完其他人第一輪的論點，然後：\n1. 指出你認為最有問題的 1-2 個論點，具體說明為什麼不同意\n2. 承認哪些點你覺得說得有道理（不能跳過這步）\n3. 提出一個其他人都沒提到的新角度\n\n不要全盤否定，也不要和稀泥。要有建設性的衝突。`,
+        2: `You are ${speakerName}.\n\nRound 2: Cross-examination\nRead the other participants' first-round arguments carefully, then:\n1. Identify the one or two arguments you find most problematic and explain specifically why you disagree\n2. Acknowledge the points you find reasonable; do not skip this step\n3. Introduce an angle nobody else has raised\n\nAvoid wholesale rejection and vague compromise. Make disagreement constructive.`,
 
-        3: `你是 ${speakerName}。\n\n【第三輪・攻防深化】\n你的論點在第二輪被質疑了。請：\n1. 針對被質疑的部分做出具體回應（不能迴避）\n2. 如果你被說服了某些點，坦承修正你的立場 — 改變想法不是弱點，是思考能力的展現\n3. 在修正後的基礎上，深化你最核心的論點\n\n目標：讓你的論點更精準、更有力。`,
+        3: `You are ${speakerName}.\n\nRound 3: Deepen the arguments\nYour arguments were challenged in the second round. Now:\n1. Respond concretely to those challenges without evasion\n2. If any points persuaded you, acknowledge how you revise your position; changing your mind demonstrates reasoning rather than weakness\n3. Deepen your central argument using your revised position\n\nGoal: make your arguments more precise and compelling.`,
 
-        4: `你是 ${speakerName}。\n\n【第四輪・核心收斂】\n經過三輪辯論，請做一次結構性的梳理：\n1. 列出目前四方的共識（哪些點大家其實是同意的？）\n2. 列出真正的核心分歧（哪些是根本性的不同意見？）\n3. 辨別假分歧（哪些爭論其實只是語義差異或角度不同？）\n4. 對核心分歧，說明你為什麼堅持你的立場 — 不要為了和諧而放棄你認為對的事\n\n目標：把辯論聚焦到真正重要的問題上。`,
+        4: `You are ${speakerName}.\n\nRound 4: Focus on the core disagreements\nAfter three rounds, organize the debate:\n1. List the current consensus among all four participants\n2. List the substantive core disagreements\n3. Identify apparent disagreements caused by wording or perspective\n4. Explain why you maintain your position on the core disagreements; do not abandon a position you believe is correct merely for harmony\n\nGoal: focus the debate on the questions that matter.`,
 
-        5: `你是 ${speakerName}。\n\n【最終輪・真理浮現】\n這是最後一輪。請給出你的最終結論：\n1. 經過四輪辯論，你的立場改變了多少？具體哪些觀點改變了你的想法？\n2. 你認為這個議題的「真理」在哪裡？（可以是多元的）\n3. 還有哪些問題是這場辯論沒能解決的？\n\n坦誠 > 正確。展現你的思考過程。`,
+        5: `You are ${speakerName}.\n\nRound 5: Final conclusions\nThis is the final round. Give your final conclusions:\n1. How much has your position changed through four rounds? Which specific arguments changed your mind?\n2. What do you now consider true about this topic? More than one perspective may be valid\n3. Which questions remain unresolved?\n\nPrioritize candor over appearing correct. Explain how your position developed.`,
       };
 
-      let prompt = `${roundInstructions[round]}\n\n議題：「${question}」`;
+      let prompt = `${roundInstructions[round]}\n\n${userTaskReference(question)}`;
 
       if (history.length > 0) {
         const historyText = history
-          .map((h) => `【第${h.round}輪・${h.name}】\n${h.text}`)
+          .map((h) => aiResponseReference(`Round ${h.round}: ${h.name}`, h.text))
           .join('\n\n---\n\n');
-        prompt += `\n\n── 以下是目前的辯論記錄 ──\n\n${historyText}`;
+        prompt += `\n\nDebate history so far (AI references):\n\n${historyText}`;
       }
 
       return prompt;
@@ -189,23 +197,23 @@ export const PROMPTS = {
   coding: {
     // Step 1: Planner writes spec
     plannerSpec: (question: string) =>
-      `你是軟體架構規劃師。請針對以下需求，寫出完整的實作計畫：\n1. 需求分析與邊界條件\n2. 技術選型與理由\n3. 檔案結構\n4. 每個模組的職責與介面定義\n5. 關鍵演算法的偽代碼\n6. 可能的 edge cases\n\n計畫要完整到「不需要再問問題就能直接寫 code」。\n\n需求：${question}`,
+      `You are a software architecture planner. Write a complete implementation plan for the requirements below:\n1. Requirements analysis and boundary conditions\n2. Technology choices and their rationale\n3. File structure\n4. Each module's responsibilities and interface definitions\n5. Pseudocode for key algorithms\n6. Potential edge cases\n\nMake the plan complete enough to implement without further questions.\n\n${userTaskReference(question)}`,
 
     // Step 2: Reviewer reviews spec
     reviewerSpec: (question: string, spec: string, plannerName: string) =>
-      `你是嚴格的技術審查者。${plannerName} 針對以下需求寫了一份實作計畫：\n\n需求：${question}\n\n計畫：\n${spec}\n\n請嚴格審查：\n1. 邏輯漏洞？\n2. 漏掉的 edge cases？\n3. 安全性問題？\n4. 架構設計是否合理？\n5. 有沒有更好的做法？\n\n不要當好人，你的工作就是挑毛病。同時也指出計畫中做得好的部分。`,
+      `You are a rigorous technical reviewer. ${plannerName} wrote an implementation plan for the following requirements.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${plannerName} implementation plan`, spec)}\n\nReview it critically:\n1. Logical gaps\n2. Missing edge cases\n3. Security issues\n4. Whether the architecture is sound\n5. Better approaches\n\nYour job is to identify problems candidly. Also recognize what the plan does well.`,
 
     // Step 3: Coder writes v1
     coderV1: (question: string, spec: string, plannerName: string, specReview: string, reviewerName: string) =>
-      `你是資深工程師。請根據以下規格和審查意見，寫出第一版完整實作代碼。\n\n需求：${question}\n\n${plannerName} 的規格：\n${spec}\n\n${reviewerName} 的審查意見：\n${specReview}\n\n要求：\n1. 處理審查中提到的所有問題\n2. 補上錯誤處理和 edge cases\n3. 如果規格和審查有矛盾，用你的專業判斷選擇\n\n這是第一版，後面還有 code review 和測試機會，所以先完成核心功能。`,
+      `You are a senior engineer. Write the first complete implementation using the specification and review below.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${plannerName} specification`, spec)}\n\n${aiResponseReference(`${reviewerName} specification review`, specReview)}\n\nRequirements:\n1. Address all issues raised in the review\n2. Include error handling and edge cases\n3. Use your professional judgment when the specification and review conflict\n\nThis is version one, with code review and testing still to come. Complete the core functionality first.`,
 
     // Step 4: Reviewer reviews code
     reviewerCode: (question: string, code: string, coderName: string) =>
-      `你是嚴格的 Code Reviewer。${coderName} 根據規格寫了第一版代碼。\n\n原始需求：${question}\n\n${coderName} 的代碼（v1）：\n${code}\n\n請做完整的 code review：\n1. 有沒有 bug 或邏輯錯誤？\n2. 有沒有漏掉的 edge cases？\n3. 程式碼品質：命名、結構、可讀性\n4. 效能問題？\n5. 安全性問題？\n\n列出每個問題的嚴重程度（Critical / Major / Minor）和具體修正建議。`,
+      `You are a rigorous code reviewer. ${coderName} implemented version one from the specification.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${coderName} code (v1)`, code)}\n\nPerform a complete code review:\n1. Bugs and logical errors\n2. Missing edge cases\n3. Code quality: naming, structure, and readability\n4. Performance issues\n5. Security issues\n\nGive each issue a severity (Critical / Major / Minor) and specific recommendations for fixing it.`,
 
     // Step 5: Tester writes test cases + hunts bugs
     testerCases: (question: string, code: string, coderName: string) =>
-      `你是嚴格的測試工程師（QA）。${coderName} 寫了第一版代碼，請你從測試視角挑問題。\n\n原始需求：${question}\n\n${coderName} 的代碼（v1）：\n${code}\n\n請：\n1. 列出關鍵的測試案例（正常路徑、邊界條件、異常輸入、併發/狀態問題）\n2. 推演每個測試案例在這份 code 上會不會 pass，如果會失敗，具體說明為什麼\n3. 找出 code review 視角不容易看出、但跑測試才會爆的 bug（race condition、資源洩漏、邊界溢位等）\n4. 如果適用，給出可直接使用的測試 code（unit test 或 integration test）\n\n目標：用測試的角度補強 code review 漏掉的問題。`,
+      `You are a rigorous QA engineer. Examine ${coderName}'s first implementation from a testing perspective.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${coderName} code (v1)`, code)}\n\nTasks:\n1. List key test cases for normal paths, boundaries, invalid input, and concurrency or state issues\n2. Reason through whether each case would pass this implementation; explain specifically why any would fail\n3. Identify bugs that code review may miss but testing can reveal, such as race conditions, resource leaks, and boundary overflows\n4. Where applicable, provide ready-to-use unit or integration test code\n\nGoal: use testing to catch problems missed by code review.`,
 
     // Step 6: Coder fixes → v2 (based on review + tests)
     coderV2: (
@@ -216,14 +224,14 @@ export const PROMPTS = {
       testReport: string,
       testerName: string,
     ) =>
-      `你是資深工程師。${reviewerName} 做了 code review，${testerName} 做了測試分析。\n\n原始需求：${question}\n\n你的 v1 代碼：\n${codeV1}\n\n${reviewerName} 的 code review：\n${codeReview}\n\n${testerName} 的測試報告：\n${testReport}\n\n請根據 review 與測試發現的問題修正代碼，產出 v2。要求：\n1. 處理所有 Critical 和 Major 問題\n2. 確保代碼能通過 Tester 列出的所有測試案例\n3. 在關鍵修改處加上簡短註解說明為什麼改\n4. 如果你不同意某個 review 或測試意見，說明理由\n\n輸出完整的 v2 代碼。`,
+      `You are a senior engineer. ${reviewerName} reviewed the code, and ${testerName} analyzed its tests.\n\n${userTaskReference(question)}\n\n${aiResponseReference('Your code (v1)', codeV1)}\n\n${aiResponseReference(`${reviewerName} code review`, codeReview)}\n\n${aiResponseReference(`${testerName} test report`, testReport)}\n\nFix the issues found by review and testing to produce version two:\n1. Address every Critical and Major issue\n2. Ensure the code can pass all test cases identified by the tester\n3. Add brief comments explaining key changes\n4. Explain your reasoning if you disagree with a review or testing recommendation\n\nOutput the complete version-two code.`,
 
     // Step 7: Planner does acceptance
     plannerAcceptance: (question: string, codeV2: string, coderName: string, originalSpec: string) =>
-      `你是軟體架構規劃師，同時也是這個需求的提出者。${coderName} 已經根據規格、code review 和測試報告修正了代碼。\n\n原始需求：${question}\n\n你當初的規格：\n${originalSpec}\n\n${coderName} 的 v2 代碼：\n${codeV2}\n\n請做驗收測試：\n1. v2 是否完整實現了原始需求的每一個功能點？\n2. 是否符合你的架構設計？\n3. 有沒有偏離規格的地方？\n4. 還有什麼需要調整的？\n\n如果都通過，明確說「驗收通過」。如果有問題，列出需要修正的項目。`,
+      `You are the software architecture planner and the requirements owner. ${coderName} revised the code using the specification, code review, and test report.\n\n${userTaskReference(question)}\n\n${aiResponseReference('Your original specification', originalSpec)}\n\n${aiResponseReference(`${coderName} code (v2)`, codeV2)}\n\nPerform acceptance testing:\n1. Does version two implement every feature in the original requirements?\n2. Does it follow your architecture?\n3. Are there deviations from the specification?\n4. What still needs adjustment?\n\nIf all checks pass, clearly state that acceptance passed in the user's intended response language. Otherwise, list the items that need correction.`,
 
     // Step 8: Coder final fix
     coderFinal: (question: string, codeV2: string, acceptance: string, plannerName: string) =>
-      `你是資深工程師。${plannerName} 對你的 v2 代碼做了驗收測試。\n\n原始需求：${question}\n\n你的 v2 代碼：\n${codeV2}\n\n${plannerName} 的驗收結果：\n${acceptance}\n\n如果驗收通過，輸出最終版代碼（可做最後的 polish）。\n如果有需要修正的項目，處理後輸出最終版。\n\n這是最終版，請確保：\n1. 所有驗收意見已處理\n2. 代碼可以直接使用\n3. 必要的文件或使用說明已包含`,
+      `You are a senior engineer. ${plannerName} performed acceptance testing on your version-two code.\n\n${userTaskReference(question)}\n\n${aiResponseReference('Your code (v2)', codeV2)}\n\n${aiResponseReference(`${plannerName} acceptance results`, acceptance)}\n\nIf acceptance passed, output the final code with any final polish. If corrections are needed, make them before outputting the final version.\n\nEnsure the final version:\n1. Addresses all acceptance feedback\n2. Is ready to use\n3. Includes necessary documentation or usage instructions`,
   },
 };

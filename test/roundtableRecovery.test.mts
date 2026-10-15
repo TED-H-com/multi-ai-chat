@@ -279,6 +279,44 @@ test('a rebound recovery keeps its original deadline and cannot remain pending f
   assert.equal(coordinator.current(), undefined);
 });
 
+test('recovery timeout records whether a side panel rendered the matching controls', async () => {
+  const unavailable = new StepRecoveryCoordinator(() => 'unavailable', 5);
+  const unavailableDecision = unavailable.waitForDecision(
+    recoveryRequest(),
+    () => {},
+    (_request, presented) => new Error(presented ? 'controls were shown' : 'controls unavailable'),
+  );
+  await assert.rejects(unavailableDecision, /controls unavailable/);
+
+  const displayed = new StepRecoveryCoordinator(() => 'displayed', 5);
+  let request: StepRecoveryRequest | undefined;
+  const displayedDecision = displayed.waitForDecision(
+    recoveryRequest(),
+    (candidate) => { request = candidate; },
+    (_request, presented) => new Error(presented ? 'controls were shown' : 'controls unavailable'),
+  );
+  assert.ok(request);
+  assert.equal(displayed.markPresented({ ...request, reason: 'different diagnostic text is allowed' }), true);
+  assert.equal(displayed.markPresented({ ...request, clientId: 'stale-client' }), false);
+  await assert.rejects(displayedDecision, /controls were shown/);
+});
+
+test('a side-panel remount requires a receipt for the rebound recovery', async () => {
+  let sequence = 0;
+  const coordinator = new StepRecoveryCoordinator(() => `recovery-${++sequence}`, 5);
+  let original: StepRecoveryRequest | undefined;
+  const decision = coordinator.waitForDecision(
+    recoveryRequest(),
+    (request) => { original = request; },
+    (_request, presented) => new Error(presented ? 'old receipt leaked' : 'rebound controls unavailable'),
+  );
+  assert.ok(original);
+  assert.equal(coordinator.markPresented(original), true);
+  const rebound = coordinator.rebindClient('workflow', 'session', 'new-client');
+  assert.ok(rebound);
+  await assert.rejects(decision, /rebound controls unavailable/);
+});
+
 test('content-script rejection fails fast while successful or absent acknowledgements remain accepted', () => {
   assert.throws(() => assertContentScriptAccepted({ ok: false, error: 'already responding' }), /already responding/);
   assert.throws(() => assertContentScriptAccepted({ ok: false }), /rejected the message/);

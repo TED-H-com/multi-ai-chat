@@ -8,6 +8,7 @@ import {
   isGrokComposerInput,
   isGrokGenerationActive,
   isGrokStopControl,
+  isGrokSendControl,
   grokSessionReady,
   updateGrokTextControl,
 } from '../src/content/grokDom.ts';
@@ -73,6 +74,22 @@ test('generic Stop controls outside the Grok composer are ignored', () => {
   assert.equal(isGrokStopControl(fakeInput()), false);
   assert.equal(isGrokStopControl(fakeInput({ formHasComposer: true })), true);
   assert.equal(isGrokStopControl(fakeInput({ testId: 'chat-stop-button' })), true);
+});
+
+test('Grok submit lookup excludes unrelated form submit controls', () => {
+  assert.equal(isGrokSendControl(fakeInput()), false);
+  assert.equal(isGrokSendControl(fakeInput({ formHasComposer: true })), true);
+  assert.equal(isGrokSendControl(fakeInput({ testId: 'chat-submit' })), true);
+});
+
+test('Grok composer lookup excludes disabled and read-only inputs', () => {
+  assert.equal(isGrokComposerInput(Object.assign(fakeInput({ ariaLabel: 'Ask Grok anything' }), { disabled: true })), false);
+  assert.equal(isGrokComposerInput(Object.assign(fakeInput({ ariaLabel: 'Ask Grok anything' }), { readOnly: true })), false);
+});
+
+test('unrecognized Grok readiness remains unknown while actual generation stays ready', () => {
+  assert.equal(grokSessionReady(false, false), null);
+  assert.equal(grokSessionReady(false, true), true);
 });
 
 test('an empty replacement composer does not confirm a Grok Retry send', () => {

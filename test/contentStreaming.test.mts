@@ -8,7 +8,10 @@ import ts from 'typescript';
 
 // Run the actual content engine with a controllable clock and provider DOM.
 // The busy signal remains true while answer text arrives, just like Meta's Stop.
-function content(t: TestContext, streamWhileThinking?: boolean) {
+function content(t: TestContext, streamWhileThinking?: boolean, options: {
+  useMetaAdapter?: boolean;
+  historicalAnswer?: string;
+} = {}) {
   // Keep browser timer ordering independent of Node's experimental MockTimers,
   // whose scheduling behavior differs between the CI and local runtimes.
   let now = 10000;
@@ -59,7 +62,7 @@ function content(t: TestContext, streamWhileThinking?: boolean) {
   const input = new Textarea();
   const send = Object.assign(new Element(), { click() { input.value = ''; busy = true; } });
   const stop = Object.assign(new Element(), { click() { stopClicks++; busy = false; } });
-  const previous = Object.assign(new Element(), { textContent: 'historical answer' });
+  const previous = Object.assign(new Element(), { textContent: options.historicalAnswer ?? 'historical answer' });
   const responses = [previous];
   const window = { ...timers, getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) } as any;
   const context = vm.createContext({
@@ -87,6 +90,8 @@ function content(t: TestContext, streamWhileThinking?: boolean) {
     } },
   });
   const cache = new Map<string, any>();
+  let captureAdapter = false;
+  let adapterConfig: any;
   function load(file: string): any {
     if (cache.has(file)) return cache.get(file);
     const module = { exports: {} };
@@ -95,22 +100,32 @@ function content(t: TestContext, streamWhileThinking?: boolean) {
       compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
     }).outputText;
     vm.runInContext(`(function(require, module, exports) {${code}\n})`, context)(
-      (relative: string) => load(path.resolve(path.dirname(file), `${relative}.ts`)), module, module.exports,
+      (relative: string) => captureAdapter && relative === './base'
+        ? { createContentScript: (config: any) => { adapterConfig = config; } }
+        : load(path.resolve(path.dirname(file), `${relative}.ts`)), module, module.exports,
     );
     return module.exports;
   }
+  if (options.useMetaAdapter) {
+    captureAdapter = true;
+    load(fileURLToPath(new URL('../src/content/meta.ts', import.meta.url)));
+    captureAdapter = false;
+  }
   load(fileURLToPath(new URL('../src/content/base.ts', import.meta.url))).createContentScript({
+    ...adapterConfig,
     provider: 'meta', inputSelectors: ['#input'], sendButtonSelectors: ['#send'],
     responseSelectors: ['#answer'], stopButtonSelectors: ['#stop'],
-    loginDetector: () => true, isThinking: () => busy, streamWhileThinking,
+    inputFilter: () => true, sendButtonFilter: () => true, stopButtonFilter: () => true,
+    loginDetector: () => true, loggedOutDetector: () => false, isThinking: () => busy,
+    streamWhileThinking: streamWhileThinking ?? adapterConfig?.streamWhileThinking,
     injectInput: (_input: unknown, text: string) => { input.value = text; },
     doneDelay: 1000, chunkDebounce: 0,
   });
   t.after(() => window.__multiAiChat_meta.dispose());
   const command = (message: any): Promise<any> => new Promise(resolve => listener(message, {}, resolve));
   return {
-    async start() {
-      assert.equal((await command({ action: 'SEND_MESSAGE', provider: 'meta', requestId: 'request', workflowId: 'workflow', payload: { text: 'prompt' } })).ok, true);
+    async start(text = 'prompt') {
+      assert.equal((await command({ action: 'SEND_MESSAGE', provider: 'meta', requestId: 'request', workflowId: 'workflow', payload: { text } })).ok, true);
       tick(800);
       // The send-button lookup is asynchronous even when the first lookup succeeds.
       for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -121,7 +136,12 @@ function content(t: TestContext, streamWhileThinking?: boolean) {
       responses[1].textContent = text;
       if (notify) mutation();
     },
+    remountHistorical() {
+      responses[0] = Object.assign(new Element(), { textContent: responses[0].textContent });
+      mutation();
+    },
     end() { busy = false; },
+    resume() { busy = true; },
     tick,
     chunks: () => messages.filter(message => message.action === 'RESPONSE_CHUNK'),
     done: () => messages.filter(message => message.action === 'RESPONSE_DONE'),
@@ -129,6 +149,32 @@ function content(t: TestContext, streamWhileThinking?: boolean) {
     stopClicks: () => stopClicks,
   };
 }
+
+test('actual Meta adapter cannot attribute a remounted old Chinese answer to a new English request', async (t) => {
+  const oldAnswer = '這是上一個問題的中文回答。';
+  const app = content(t, undefined, { useMetaAdapter: true, historicalAnswer: oldAnswer });
+  await app.start('Please answer this new question in English.');
+  app.remountHistorical();
+  assert.equal(app.chunks().length, 0);
+  app.end(); app.tick(2000);
+  assert.equal(app.done().length, 0);
+  app.answer('This is the current English answer.');
+  app.tick(1000);
+  assert.equal(app.done().length, 1);
+  assert.equal(app.done()[0].payload, 'This is the current English answer.');
+  assert.equal(app.done()[0].requestId, 'request');
+  assert.equal(app.done()[0].workflowId, 'workflow');
+  assert.equal(app.chunks().some((message) => message.payload === oldAnswer), false);
+});
+
+test('actual Meta semantic tracking still accepts a genuinely appended answer with repeated text', async (t) => {
+  const app = content(t, undefined, { useMetaAdapter: true, historicalAnswer: 'repeated answer' });
+  await app.start();
+  app.answer('repeated answer');
+  assert.equal(app.chunks().at(-1)?.payload, 'repeated answer');
+  app.end(); app.tick(2000);
+  assert.equal(app.done()[0]?.payload, 'repeated answer');
+});
 
 test('Meta can stream answer mutations while Stop remains visible without finishing early', async (t) => {
   const app = content(t, true);
@@ -188,5 +234,34 @@ test('scoped Stop during a streamed answer suppresses subsequent chunks and comp
   app.answer('late text after Stop');
   app.tick(6000);
   assert.equal(app.chunks().length, 1);
+  assert.equal(app.done().length, 0);
+});
+
+test('generation resuming during the completion quiet period does not finalize a partial answer', async (t) => {
+  const app = content(t);
+  await app.start();
+  app.end();
+  app.answer('partial answer');
+  app.resume();
+  app.tick(1000);
+  app.end();
+  app.tick(1000);
+  app.resume();
+  app.tick(1000);
+  assert.equal(app.done().length, 0);
+  app.end();
+  app.answer('complete answer');
+  app.tick(2000);
+  assert.equal(app.done()[0]?.payload, 'complete answer');
+});
+
+test('generation resuming during the no-response quiet period does not report failure', async (t) => {
+  const app = content(t, true);
+  await app.start();
+  app.tick(120000);
+  app.end();
+  app.tick(2200);
+  app.resume();
+  app.tick(1000);
   assert.equal(app.done().length, 0);
 });

@@ -8,6 +8,7 @@ import {
   isGrokComposerInput,
   isGrokGenerationActive,
   isGrokStopControl,
+  isGrokSendControl,
   grokResponseContentRoot,
   grokSessionReady,
   updateGrokTextControl,
@@ -60,6 +61,7 @@ createContentScript({
     'form button[type="submit"]',
     'button[type="submit"]',
   ],
+  sendButtonFilter: isGrokSendControl,
 
   userMessageSelectors: [
     '[data-testid="user-message"]',
@@ -67,6 +69,7 @@ createContentScript({
   // Retry sends the exact same prompt again. Count matching turns so a React remount of the
   // failed turn cannot masquerade as confirmation for the new attempt.
   userMessageTracking: 'semantic-count',
+  sendConfirmation: 'matching-user-message',
   requireSameComposerForClearConfirmation: GROK_REQUIRE_SAME_COMPOSER_FOR_CLEAR_CONFIRMATION,
 
   responseSelectors: [

@@ -1,5 +1,11 @@
 import type { AIProvider, ExtensionMessage } from '../shared/types';
-import { encodeError } from '../shared/errors';
+import {
+  submissionEvidenceForState,
+  type ProviderRequestDiagnostics,
+  type ProviderRequestState,
+} from '../shared/providerRequestState';
+import type { SubmissionEvidence } from '../shared/autonomousRecovery';
+import { decodeError, encodeError } from '../shared/errors';
 import {
   extractResponseContent,
   longerResponseText,
@@ -32,6 +38,10 @@ export interface ContentScriptConfig {
   sendButtonFilter?: (element: Element) => boolean;
   userMessageSelectors?: string[];
   userMessageTracking?: 'element-identity' | 'semantic-count';
+  sendConfirmation?: 'heuristic' | 'matching-user-message' | 'single-activation';
+  readInputText?: (element: Element) => string;
+  inputMatchesPrompt?: (element: Element, text: string) => boolean;
+  preserveExistingDraft?: boolean;
   requireSameComposerForClearConfirmation?: boolean;
   responseSelectors: string[];
   responseTracking?: 'element-identity' | 'semantic-latest';
@@ -47,7 +57,12 @@ export interface ContentScriptConfig {
   // Some providers keep their busy/Stop signal active throughout answer streaming.
   // Allow chunks while that signal still prevents premature completion.
   streamWhileThinking?: boolean;
-  injectInput?: (element: Element, text: string) => void | Promise<void>;
+  injectInput?: (element: Element, text: string, isActive?: () => boolean) => void | Promise<void>;
+  // Background tabs can have timers aggressively deferred. Providers that use a
+  // verified, single-activation Send control can opt into dispatching that first
+  // click immediately after controlled-editor readback instead of waiting for
+  // the generic cosmetic pre-send delay.
+  immediateSendAfterInsertion?: boolean;
   doneDelay?: number;
   chunkDebounce?: number;
 }
@@ -56,6 +71,27 @@ interface SendActivationResult {
   ok: boolean;
   path: 'button-click' | 'enter-key';
   detail?: string;
+  errorKey?: string;
+}
+
+interface SettledRequestIdentity {
+  requestId?: string;
+  workflowId?: string;
+  dispatched: boolean;
+}
+
+interface CancelledRequestCleanup extends SettledRequestIdentity {
+  generation: number;
+  deadline: number;
+  stopActivated: boolean;
+  timer?: number;
+}
+
+interface CompletedContentRequest {
+  requestId: string;
+  workflowId: string;
+  text: string;
+  completedAt: number;
 }
 
 const INPUT_RETRY_MS = 250;
@@ -65,6 +101,8 @@ const PRE_SEND_DELAY_MS = 800;
 const SEND_RETRY_DELAY_MS = 1500;
 const SEND_CONFIRMATION_GRACE_MS = 2000;
 const SEND_VERIFY_DELAY_MS = 1500;
+const STRICT_SEND_CONFIRMATION_TIMEOUT_MS = 10_000;
+const CANCELLED_SEND_CLEANUP_TIMEOUT_MS = 10_000;
 // 送出成功但完全抓不到回應時，至少等這麼久才放棄。慢的模型（深度思考、搜尋）
 // 常常好幾十秒才吐出第一個字，而 isThinking() 只靠硬寫的選擇器，漏判是常態。
 // notes: 固定 2 分鐘，遠短於背景的 600 秒逾時；若真出現更慢的模型再拉長
@@ -93,6 +131,8 @@ export function createContentScript(config: ContentScriptConfig): void {
     anchorSemanticResponsesAfterMatchingUserMessage = false,
     responseContentRoot = (response) => response,
     userMessageTracking = 'element-identity',
+    sendConfirmation = 'heuristic',
+    preserveExistingDraft = false,
     loginDetector,
     loggedOutDetector = () => false,
     loginLossDelay = 0,
@@ -127,7 +167,12 @@ export function createContentScript(config: ContentScriptConfig): void {
   let lastActivatedInput: Element | undefined;
   let disposed = false;
   let responseGeneration = 0;
-  let failedRequestTombstone: { requestId?: string; workflowId?: string } | undefined;
+  let failedRequestTombstone: SettledRequestIdentity | undefined;
+  let sendDispatched = false;
+  let thinkingAtRequestStart = false;
+  let cancelledRequestCleanup: CancelledRequestCleanup | undefined;
+  let recentCompletedRequest: CompletedContentRequest | undefined;
+  let lastReportedRequestState: ProviderRequestState | undefined;
   const sendTimeouts = new Set<number>();
 
   const queryInput = (): Element | null => queryFirst(
@@ -136,6 +181,20 @@ export function createContentScript(config: ContentScriptConfig): void {
     requireVisibleInput,
     inputFilter,
   );
+  const readInputText = config.readInputText
+    ?? (sendConfirmation === 'heuristic' ? getInputText : getExactInputText);
+  const inputTextMatches = config.inputMatchesPrompt ?? ((input: Element, text: string): boolean => {
+    const actual = readInputText(input);
+    const normalize = sendConfirmation === 'heuristic' && !preserveExistingDraft
+      ? (value: string) => value.replace(/\s+/g, '')
+      : (value: string) => value.replace(/\r\n?/g, '\n');
+    return normalize(actual) === normalize(text);
+  });
+
+  function assertInputLanded(input: Element, expected: string): void {
+    if (!readInputText(input).trim()) throw new Error('editor remained empty');
+    if (!inputTextMatches(input, expected)) throw new Error('editor text did not match the requested prompt');
+  }
 
   function isContextValid(): boolean {
     if (disposed || scope[marker] !== runtimeState) return false;
@@ -154,6 +213,22 @@ export function createContentScript(config: ContentScriptConfig): void {
     chrome.runtime.sendMessage(message).catch(() => {});
   }
 
+  function reportRequestState(
+    state: ProviderRequestState,
+    submission: SubmissionEvidence,
+    diagnostics?: ProviderRequestDiagnostics,
+  ): void {
+    if (!activeRequestId || !activeWorkflowId || (lastReportedRequestState === state && !diagnostics)) return;
+    lastReportedRequestState = state;
+    safeSendMessage({
+      action: 'PROVIDER_REQUEST_STATE',
+      provider,
+      requestId: activeRequestId,
+      workflowId: activeWorkflowId,
+      payload: { state, submission, ...(diagnostics ? { diagnostics } : {}) },
+    });
+  }
+
   function cleanup(): void {
     if (disposed) return;
     disposed = true;
@@ -163,6 +238,9 @@ export function createContentScript(config: ContentScriptConfig): void {
     activePromptText = '';
     lastActivatedInput = undefined;
     failedRequestTombstone = undefined;
+    recentCompletedRequest = undefined;
+    lastReportedRequestState = undefined;
+    clearCancelledRequestCleanup();
     clearResponseTimers();
     if (statusInterval !== undefined) clearInterval(statusInterval);
     statusInterval = undefined;
@@ -204,14 +282,17 @@ export function createContentScript(config: ContentScriptConfig): void {
   async function sendMessage(text: string, requestId?: string, workflowId?: string): Promise<void> {
     if (!text.trim()) throw new Error(encodeError('error.empty_message'));
     if (waitingForResponse) throw new Error(encodeError('error.response_in_progress', { provider }));
-
-    const input = await retryLookup(queryInput, INPUT_TIMEOUT_MS, isContextValid);
-    if (!input) {
-      const reason = encodeError('error.input_not_found', { provider });
-      finishWithError(reason, requestId, workflowId);
-      throw new Error(reason);
+    if (sendConfirmation === 'single-activation' && isThinking()) {
+      throw new Error(encodeError('error.response_in_progress', { provider }));
     }
 
+    // Reserve ownership before the first await so lookup is cancellable and concurrent
+    // commands cannot both enter this provider's editor.
+    clearCancelledRequestCleanup();
+    const generation = ++responseGeneration;
+    waitingForResponse = true;
+    activeRequestId = requestId;
+    activeWorkflowId = workflowId;
     const existingResponses = queryResponses();
     responseBaselineEls = new Set(existingResponses);
     matchingUserMessageElement = undefined;
@@ -219,139 +300,224 @@ export function createContentScript(config: ContentScriptConfig): void {
       querySemanticResponses(),
       extractResponseText,
     );
-    responseGeneration += 1;
     userMessageBaselineEls = new Set(queryUserMessages());
     matchingUserMessageBaselineCount = matchingPromptCount(
-      Array.from(userMessageBaselineEls, (element) => element.textContent ?? ''),
+      Array.from(userMessageBaselineEls, userMessageText),
       text,
     );
     sawMatchingUserMessage = false;
-    waitingForResponse = true;
-    activeRequestId = requestId;
-    activeWorkflowId = workflowId;
     // This SEND is now the active request. Recovery always consumes a settled failure's
     // tombstone before starting Retry, and no older cleanup may target this newer request.
     failedRequestTombstone = undefined;
+    sendDispatched = false;
     lastResponseText = '';
     sawGenerationActivity = false;
     responseWaitStartedAt = Date.now();
     activePromptText = text;
+    thinkingAtRequestStart = isThinking();
     lastActivatedInput = undefined;
+    lastReportedRequestState = undefined;
+    reportRequestState('prompt_inserting', 'not_submitted');
     startResponsePolling();
+
+    const input = await retryLookup(queryInput, INPUT_TIMEOUT_MS, () => isActiveRequest(requestId, generation));
+    if (!isActiveRequest(requestId, generation)) throw new Error('request cancelled during input lookup');
+    if (!input) {
+      const reason = encodeError('error.input_not_found', { provider });
+      finishWithError(reason, requestId, workflowId, generation);
+      throw new Error(reason);
+    }
+    if (sendConfirmation === 'single-activation' && isThinking()) {
+      const reason = encodeError('error.response_in_progress', { provider });
+      finishWithError(reason, requestId, workflowId, generation);
+      throw new Error(reason);
+    }
+    if ((preserveExistingDraft || sendConfirmation === 'matching-user-message') && readInputText(input).trim()
+      && !inputTextMatches(input, text)) {
+      reportRequestState('existing_draft', 'not_submitted');
+      const reason = encodeError('error.existing_draft', { provider });
+      finishWithError(reason, requestId, workflowId, generation);
+      throw new Error(reason);
+    }
 
     const injectionStartedAt = Date.now();
     try {
-      if (!isActiveRequest(requestId)) throw new Error('request cancelled before input injection');
-      await injectInput(input, text);
+      if (!isActiveRequest(requestId, generation)) throw new Error('request cancelled before input injection');
+      if ((sendConfirmation === 'heuristic' && !preserveExistingDraft) || !inputTextMatches(input, text)) {
+        await injectInput(input, text, () => isActiveRequest(requestId, generation));
+      }
       await Promise.resolve();
-      if (!isActiveRequest(requestId)) throw new Error('request cancelled during input injection');
+      if (!isActiveRequest(requestId, generation)) throw new Error('request cancelled during input injection');
       assertInputLanded(input, text);
+      reportRequestState('prompt_inserted', 'not_submitted');
     } catch (error) {
-      finishWithError(encodeError('error.input_injection_failed', { provider, detail: errorMessage(error) }), requestId, workflowId);
+      finishWithError(encodeError('error.input_injection_failed', { provider, detail: errorMessage(error) }), requestId, workflowId, generation);
       throw error;
     }
 
+    const beginFirstSendAttempt = async (): Promise<void> => {
+      const firstAttempt = await activateSend(text, requestId, generation);
+      if (!isActiveRequest(requestId, generation)) return;
+      if (sendConfirmation !== 'heuristic') {
+        if (!firstAttempt.ok) {
+          finishWithError(encodeError(firstAttempt.errorKey ?? 'error.send_failed', {
+            provider, ...(firstAttempt.detail ? { detail: firstAttempt.detail } : {}),
+          }), requestId, workflowId, generation);
+          return;
+        }
+        // A dispatched click is uncertain until there is positive current-turn evidence.
+        // Never refill or activate again while an earlier action may still be accepted.
+        scheduleForRequest(() => {
+          if (sendStarted()) return;
+          finishWithError(encodeError('error.send_unconfirmed', { provider }), requestId, workflowId, generation);
+        }, STRICT_SEND_CONFIRMATION_TIMEOUT_MS, requestId, generation);
+        return;
+      }
+      scheduleForRequest(
+        () => void retrySendIfStillPending(text, firstAttempt, requestId, generation),
+        SEND_RETRY_DELAY_MS,
+        requestId,
+        generation,
+      );
+    };
+    if (config.immediateSendAfterInsertion) {
+      await beginFirstSendAttempt();
+      return;
+    }
     const delay = Math.max(0, PRE_SEND_DELAY_MS - (Date.now() - injectionStartedAt));
-    scheduleForRequest(() => {
-      void (async () => {
-        const firstAttempt = await activateSend(text, requestId);
-        scheduleForRequest(
-          () => void retrySendIfStillPending(text, firstAttempt, requestId),
-          SEND_RETRY_DELAY_MS,
-          requestId,
-        );
-      })();
-    }, delay, requestId);
+    scheduleForRequest(() => { void beginFirstSendAttempt(); }, delay, requestId, generation);
   }
 
-  async function retrySendIfStillPending(text: string, firstAttempt: SendActivationResult, requestId?: string): Promise<void> {
-    if (!isActiveRequest(requestId) || sendStarted()) return;
-    if (firstAttempt.ok && await waitForSendConfirmation(requestId, SEND_CONFIRMATION_GRACE_MS)) return;
-    if (!isActiveRequest(requestId)) return;
-    const retryAttempt = await activateSend(text, requestId);
-    if (!isActiveRequest(requestId)) return;
+  async function retrySendIfStillPending(text: string, firstAttempt: SendActivationResult, requestId: string | undefined, generation: number): Promise<void> {
+    if (!isActiveRequest(requestId, generation) || sendStarted()) return;
+    if (firstAttempt.ok && await waitForSendConfirmation(requestId, SEND_CONFIRMATION_GRACE_MS, generation)) return;
+    if (!isActiveRequest(requestId, generation)) return;
+    const retryAttempt = await activateSend(text, requestId, generation);
+    if (!isActiveRequest(requestId, generation)) return;
     if (!retryAttempt.ok) {
       finishWithError(encodeError('error.send_failed', { provider, detail: retryAttempt.detail ?? firstAttempt.detail ?? retryAttempt.path }));
       return;
     }
     scheduleForRequest(
-      () => void verifySendAfterRetry(text, requestId),
+      () => void verifySendAfterRetry(text, requestId, generation),
       SEND_VERIFY_DELAY_MS,
       requestId,
+      generation,
     );
   }
 
-  async function waitForSendConfirmation(requestId: string | undefined, timeoutMs: number): Promise<boolean> {
+  async function waitForSendConfirmation(requestId: string | undefined, timeoutMs: number, generation: number): Promise<boolean> {
     const startedAt = Date.now();
-    while (isActiveRequest(requestId) && Date.now() - startedAt < timeoutMs) {
+    while (isActiveRequest(requestId, generation) && Date.now() - startedAt < timeoutMs) {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      if (isActiveRequest(requestId) && sendStarted()) return true;
+      if (isActiveRequest(requestId, generation) && sendStarted()) return true;
     }
     return false;
   }
 
-  async function verifySendAfterRetry(text: string, requestId?: string): Promise<void> {
-    if (!isActiveRequest(requestId) || sendStarted()) return;
-    if (await waitForSendConfirmation(requestId, SEND_CONFIRMATION_GRACE_MS)) return;
-    if (!isActiveRequest(requestId)) return;
+  async function verifySendAfterRetry(text: string, requestId: string | undefined, generation: number): Promise<void> {
+    if (!isActiveRequest(requestId, generation) || sendStarted()) return;
+    if (await waitForSendConfirmation(requestId, SEND_CONFIRMATION_GRACE_MS, generation)) return;
+    if (!isActiveRequest(requestId, generation)) return;
     let currentInput: Element | null;
     try {
-      currentInput = await prepareLiveInput(text, requestId);
+      currentInput = await prepareLiveInput(text, requestId, generation);
     } catch (error) {
-      finishWithError(encodeError('error.send_failed', { provider, detail: errorMessage(error) }));
+      finishWithError(encodeError('error.send_failed', { provider, detail: errorMessage(error) }), requestId, activeWorkflowId, generation);
       return;
     }
-    if (!isActiveRequest(requestId)) return;
+    if (!isActiveRequest(requestId, generation)) return;
     if (!currentInput) {
       finishWithError(encodeError('error.input_disappeared', { provider }));
       return;
     }
     lastActivatedInput = currentInput;
     const enterOk = dispatchEnter(currentInput);
+    if (enterOk) sendDispatched = true;
     if (!enterOk) {
       finishWithError(encodeError('error.send_failed', { provider, detail: 'Enter dispatch failed' }));
       return;
     }
     scheduleForRequest(() => {
-      if (!isActiveRequest(requestId) || sendStarted()) return;
+      if (!isActiveRequest(requestId, generation) || sendStarted()) return;
       finishWithError(encodeError('error.send_rejected', { provider }));
-    }, SEND_VERIFY_DELAY_MS, requestId);
+    }, SEND_VERIFY_DELAY_MS, requestId, generation);
   }
 
-  async function activateSend(text: string, requestId?: string): Promise<SendActivationResult> {
+  async function activateSend(text: string, requestId: string | undefined, generation: number): Promise<SendActivationResult> {
     let input: Element | null;
     try {
-      input = await prepareLiveInput(text, requestId);
+      input = await prepareLiveInput(text, requestId, generation);
     } catch (error) {
-      return { ok: false, path: 'enter-key', detail: errorMessage(error) };
+      const detail = errorMessage(error);
+      return { ok: false, path: 'enter-key', detail,
+        errorKey: (preserveExistingDraft || sendConfirmation !== 'heuristic') && detail === 'live editor contains different text'
+          ? 'error.existing_draft'
+          : sendConfirmation === 'single-activation' && detail === 'verified editor no longer contains the requested prompt'
+            ? 'error.input_injection_failed' : undefined };
     }
     if (!input) return { ok: false, path: 'enter-key', detail: 'input disappeared' };
     lastActivatedInput = input;
     const sendButton = await retryLookup(
       () => querySendButton(input),
       SEND_BUTTON_TIMEOUT_MS,
-      () => isActiveRequest(requestId),
+      () => isActiveRequest(requestId, generation),
     );
-    if (!isActiveRequest(requestId)) return { ok: false, path: 'enter-key', detail: 'request cancelled' };
-    if (sendButton && !isDisabled(sendButton) && clickElement(sendButton)) return { ok: true, path: 'button-click' };
+    if (!isActiveRequest(requestId, generation)) return { ok: false, path: 'enter-key', detail: 'request cancelled' };
+    if (sendConfirmation !== 'heuristic') {
+      if (sendStarted()) return { ok: true, path: 'button-click' };
+      if (queryInput() !== input || !inputTextMatches(input, text)) {
+        return { ok: false, path: 'button-click', errorKey: 'error.send_unconfirmed' };
+      }
+      if (!sendButton) return { ok: false, path: 'button-click', errorKey: 'error.send_action_unavailable' };
+      if (isDisabled(sendButton)) return { ok: false, path: 'button-click', errorKey: 'error.send_action_disabled' };
+      if (sendConfirmation === 'single-activation') {
+        if (isThinking()) return { ok: false, path: 'button-click', errorKey: 'error.response_in_progress' };
+        // Ignore any orphan turns that appeared during lookup or editor insertion.
+        // Capture the actual current page immediately before our own dispatch.
+        responseBaselineEls = new Set(queryResponses());
+        semanticResponseBaseline = captureSemanticResponseBaseline(querySemanticResponses(), extractResponseText);
+        userMessageBaselineEls = new Set(queryUserMessages());
+        matchingUserMessageBaselineCount = matchingPromptCount(Array.from(userMessageBaselineEls, userMessageText), text);
+        sawMatchingUserMessage = false;
+        matchingUserMessageElement = undefined;
+        responseWaitStartedAt = Date.now();
+      }
+      reportRequestState('submission_pending', 'uncertain');
+      sendDispatched = true;
+      const ok = clickElement(sendButton);
+      return { ok, path: 'button-click', detail: ok ? undefined : 'send control could not be activated' };
+    }
+    if (sendButton && !isDisabled(sendButton) && clickElement(sendButton)) {
+      reportRequestState('submission_pending', 'uncertain');
+      sendDispatched = true;
+      return { ok: true, path: 'button-click' };
+    }
     const ok = dispatchEnter(input);
+    if (ok) {
+      reportRequestState('submission_pending', 'uncertain');
+      sendDispatched = true;
+    }
     return { ok, path: 'enter-key', detail: ok ? undefined : 'Enter dispatch failed' };
   }
 
-  async function prepareLiveInput(text: string, requestId?: string): Promise<Element | null> {
-    if (!isActiveRequest(requestId)) return null;
+  async function prepareLiveInput(text: string, requestId: string | undefined, generation: number): Promise<Element | null> {
+    if (!isActiveRequest(requestId, generation)) return null;
     const input = await retryLookup(
       queryInput,
       INPUT_TIMEOUT_MS,
-      () => isActiveRequest(requestId),
+      () => isActiveRequest(requestId, generation),
     );
-    if (!input || !isActiveRequest(requestId)) return null;
-    if (composerTextMatches(input, text)) return input;
-    if (getInputText(input).trim()) throw new Error('live editor contains different text');
-    if (!isActiveRequest(requestId)) return null;
-    await injectInput(input, text);
+    if (!input || !isActiveRequest(requestId, generation)) return null;
+    if (inputTextMatches(input, text)) return input;
+    if (readInputText(input).trim()) throw new Error('live editor contains different text');
+    if (sendConfirmation === 'single-activation') {
+      throw new Error('verified editor no longer contains the requested prompt');
+    }
+    if (!isActiveRequest(requestId, generation)) return null;
+    await injectInput(input, text, () => isActiveRequest(requestId, generation));
     await Promise.resolve();
-    if (!isActiveRequest(requestId)) return null;
+    if (!isActiveRequest(requestId, generation)) return null;
     assertInputLanded(input, text);
     return input;
   }
@@ -370,6 +536,10 @@ export function createContentScript(config: ContentScriptConfig): void {
     return selectors.length ? Array.from(document.querySelectorAll(selectors.join(', '))) : [];
   }
 
+  function userMessageText(element: Element): string {
+    return (element as HTMLElement).innerText || element.textContent || '';
+  }
+
   function hasNewMatchingUserMessage(): boolean {
     if (sawMatchingUserMessage) {
       if (!anchorSemanticResponsesAfterMatchingUserMessage || matchingUserMessageElement?.isConnected) {
@@ -383,7 +553,7 @@ export function createContentScript(config: ContentScriptConfig): void {
     const messages = queryUserMessages();
     if (userMessageTracking === 'semantic-count') {
       const matchingMessages = messages.filter((element) => (
-        contentMatchesPrompt(element.textContent ?? '', activePromptText)
+        contentMatchesPrompt(userMessageText(element), activePromptText)
       ));
       sawMatchingUserMessage = matchingMessages.length > matchingUserMessageBaselineCount;
       if (sawMatchingUserMessage) {
@@ -393,7 +563,7 @@ export function createContentScript(config: ContentScriptConfig): void {
     }
     matchingUserMessageElement = messages.find((element) => (
       !userMessageBaselineEls.has(element)
-      && contentMatchesPrompt(element.textContent ?? '', activePromptText)
+      && contentMatchesPrompt(userMessageText(element), activePromptText)
     ));
     sawMatchingUserMessage = Boolean(matchingUserMessageElement);
     return sawMatchingUserMessage;
@@ -401,8 +571,29 @@ export function createContentScript(config: ContentScriptConfig): void {
 
   function sendStarted(): boolean {
     if (!waitingForResponse) return true;
+    if (sendConfirmation === 'matching-user-message') {
+      const accepted = hasNewMatchingUserMessage();
+      if (accepted) {
+        sawGenerationActivity = true;
+        sendDispatched = true;
+        reportRequestState('submission_accepted', 'submitted');
+      }
+      return accepted;
+    }
+    if (sendConfirmation === 'single-activation') {
+      if (!sendDispatched) return false;
+      const hasCurrentResponse = responseTracking === 'semantic-latest'
+        ? Boolean(getLatestResponseText())
+        : queryResponses().some((element) => !responseBaselineEls.has(element));
+      const accepted = hasNewMatchingUserMessage() || hasCurrentResponse
+        || (sendDispatched && !thinkingAtRequestStart && isCurrentTurnThinking());
+      if (accepted) sawGenerationActivity = true;
+      if (accepted) reportRequestState('submission_accepted', 'submitted');
+      return accepted;
+    }
     if (isCurrentTurnThinking()) {
       sawGenerationActivity = true;
+      reportRequestState('submission_accepted', 'submitted');
       return true;
     }
     const hasCurrentResponse = responseTracking === 'semantic-latest'
@@ -410,26 +601,32 @@ export function createContentScript(config: ContentScriptConfig): void {
       : queryResponses().some((element) => !responseBaselineEls.has(element));
     if (hasCurrentResponse) {
       sawGenerationActivity = true;
+      reportRequestState('submission_accepted', 'submitted');
       return true;
     }
     const hasNewUserMessage = hasNewMatchingUserMessage();
     if (hasNewUserMessage) {
       sawGenerationActivity = true;
+      reportRequestState('submission_accepted', 'submitted');
       return true;
     }
     const input = queryInput();
-    const cleared = Boolean(input && !getInputText(input).trim());
+    const cleared = Boolean(input && !readInputText(input).trim());
     const confirmedByClear = cleared && clearedComposerConfirmsSend(
       lastActivatedInput,
       input,
       Boolean(config.requireSameComposerForClearConfirmation),
       hasNewUserMessage,
     );
-    if (confirmedByClear) sawGenerationActivity = true;
+    if (confirmedByClear) {
+      sawGenerationActivity = true;
+      reportRequestState('submission_accepted', 'submitted');
+    }
     return confirmedByClear;
   }
 
   function isCurrentTurnThinking(): boolean {
+    if (sendConfirmation === 'single-activation' && !sendDispatched) return false;
     return generationSignalBelongsToCurrentTurn(
       isThinking(),
       requireMatchingUserMessageForGenerationSignals,
@@ -438,6 +635,7 @@ export function createContentScript(config: ContentScriptConfig): void {
   }
 
   function getLatestResponseText(): string | null {
+    if (sendConfirmation === 'single-activation' && !sendDispatched) return null;
     const currentTurnConfirmed = !requireMatchingUserMessageForGenerationSignals
       || hasNewMatchingUserMessage();
     if (responseTracking === 'semantic-latest') {
@@ -477,6 +675,22 @@ export function createContentScript(config: ContentScriptConfig): void {
     return [];
   }
 
+  function captureFailureDiagnostics(reason: string): ProviderRequestDiagnostics {
+    const currentText = getLatestResponseText();
+    // Counts and lengths are intentionally the only page observations emitted
+    // for a failed request. They help distinguish a selector miss from an empty
+    // or still-streaming candidate without serializing provider content.
+    return {
+      responseCandidateCount: queryResponses().length,
+      semanticResponseCandidateCount: responseTracking === 'semantic-latest'
+        ? querySemanticResponses().length
+        : undefined,
+      currentResponseLength: currentText?.length ?? 0,
+      generationObserved: sawGenerationActivity,
+      failureCode: decodeError(reason)?.key ?? 'unstructured_provider_error',
+    };
+  }
+
   function extractResponseText(response: Element): string | null {
     return extractResponseContent(response, responseContentRoot);
   }
@@ -496,6 +710,7 @@ export function createContentScript(config: ContentScriptConfig): void {
     const currentText = getLatestResponseText();
     if (!currentText || currentText === lastResponseText) return;
     sawGenerationActivity = true;
+    reportRequestState('generating', 'submitted');
     lastResponseText = currentText;
     const now = Date.now();
     if (now - lastChunkTime >= chunkDebounce) {
@@ -539,6 +754,7 @@ export function createContentScript(config: ContentScriptConfig): void {
       if (!sawGenerationActivity || responseTimeout !== undefined) return;
       if (Date.now() - responseWaitStartedAt < NO_RESPONSE_GRACE_MS) return;
       scheduleResponseTimeout(() => {
+        if (isCurrentTurnThinking()) return;
         const finalText = getLatestResponseText();
         if (finalText) {
           lastResponseText = finalText;
@@ -560,7 +776,7 @@ export function createContentScript(config: ContentScriptConfig): void {
           if (!isCurrentResponseGeneration(generation)) return clearDoneCheck(timer);
           if (!isCurrentTurnThinking()) {
             clearDoneCheck(timer);
-            scheduleResponseTimeout(finishResponse, doneDelay, generation);
+            scheduleResponseTimeout(checkIfDone, doneDelay, generation);
           }
         }, 1000);
         checkDoneInterval = timer;
@@ -572,22 +788,39 @@ export function createContentScript(config: ContentScriptConfig): void {
 
   function finishResponse(generation = responseGeneration): void {
     if (!isCurrentResponseGeneration(generation)) return;
+    if (isCurrentTurnThinking()) {
+      checkIfDone(generation);
+      return;
+    }
     // Must re-read before resetResponseState(): the baseline filter keys off waitingForResponse.
     const text = longerResponseText(lastResponseText, getLatestResponseText());
     const requestId = activeRequestId;
     const workflowId = activeWorkflowId;
+    if (requestId && workflowId) {
+      recentCompletedRequest = { requestId, workflowId, text, completedAt: Date.now() };
+      reportRequestState('response_complete', 'submitted');
+    }
     resetResponseState();
     failedRequestTombstone = undefined;
     safeSendMessage({ action: 'RESPONSE_DONE', provider, requestId, workflowId, payload: text });
   }
 
-  function finishWithError(reason: string, requestId = activeRequestId, workflowId = activeWorkflowId): void {
+  function finishWithError(reason: string, requestId = activeRequestId, workflowId = activeWorkflowId, generation = responseGeneration): void {
+    if (!isActiveRequest(requestId, generation) || workflowId !== activeWorkflowId) return;
     const settlesActiveRequest = waitingForResponse
       && requestId === activeRequestId
       && workflowId === activeWorkflowId;
     const failedRequest = settlesActiveRequest && (requestId !== undefined || workflowId !== undefined)
-      ? { requestId, workflowId }
+      ? { requestId, workflowId, dispatched: sendDispatched }
       : undefined;
+    const failureState: ProviderRequestState = reason.includes('error.existing_draft')
+      ? 'existing_draft'
+      : sendDispatched ? 'uncertain_submission' : 'recoverable_failure';
+    reportRequestState(
+      failureState,
+      sendDispatched ? 'uncertain' : 'not_submitted',
+      captureFailureDiagnostics(reason),
+    );
     resetResponseState();
     // Recovery arrives after RESPONSE_DONE has settled the background waiter. Keep only this
     // exact failed identity so its later scoped STOP can still click a provider stream that
@@ -606,22 +839,70 @@ export function createContentScript(config: ContentScriptConfig): void {
       requestId,
       workflowId,
     )) return false;
+    const stoppedRequest = waitingForResponse
+      ? { requestId: activeRequestId, workflowId: activeWorkflowId, dispatched: sendDispatched }
+      : failedRequestTombstone;
+    if (sendConfirmation === 'single-activation' && stoppedRequest?.dispatched === false) {
+      // This request never activated Send. A visible Stop belongs to another turn.
+      resetResponseState();
+      failedRequestTombstone = undefined;
+      return true;
+    }
     const stopButton = queryFirst(
       config.stopButtonSelectors ?? [],
       document,
       true,
       config.stopButtonFilter,
     );
-    if (stopButton) clickElement(stopButton);
+    const stopActivated = Boolean(stopButton && clickElement(stopButton));
     resetResponseState();
-    failedRequestTombstone = undefined;
+    failedRequestTombstone = sendConfirmation !== 'heuristic' && stoppedRequest?.dispatched
+      ? stoppedRequest : undefined;
+    if (failedRequestTombstone) {
+      cancelledRequestCleanup = {
+        ...failedRequestTombstone,
+        generation: responseGeneration,
+        deadline: Date.now() + CANCELLED_SEND_CLEANUP_TIMEOUT_MS,
+        stopActivated,
+      };
+      pollCancelledRequestStop(cancelledRequestCleanup);
+    }
     return true;
+  }
+
+  function pollCancelledRequestStop(candidate: CancelledRequestCleanup): void {
+    if (cancelledRequestCleanup !== candidate) return;
+    if (!isContextValid() || waitingForResponse || responseGeneration !== candidate.generation
+      || failedRequestTombstone?.requestId !== candidate.requestId
+      || failedRequestTombstone?.workflowId !== candidate.workflowId) {
+      clearCancelledRequestCleanup();
+      return;
+    }
+    const stopButton = queryFirst(config.stopButtonSelectors ?? [], document, true, config.stopButtonFilter);
+    if (!stopButton && candidate.stopActivated) {
+      failedRequestTombstone = undefined;
+      clearCancelledRequestCleanup();
+      return;
+    }
+    if (Date.now() >= candidate.deadline) {
+      // Stop polling, but retain the exact identity for a later explicit scoped cleanup.
+      clearCancelledRequestCleanup();
+      return;
+    }
+    if (stopButton && !candidate.stopActivated) candidate.stopActivated = clickElement(stopButton);
+    candidate.timer = window.setTimeout(() => pollCancelledRequestStop(candidate), INPUT_RETRY_MS);
+  }
+
+  function clearCancelledRequestCleanup(): void {
+    if (cancelledRequestCleanup?.timer !== undefined) window.clearTimeout(cancelledRequestCleanup.timer);
+    cancelledRequestCleanup = undefined;
   }
 
   function resetResponseState(): void {
     waitingForResponse = false;
     responseGeneration += 1;
     clearResponseTimers();
+    clearCancelledRequestCleanup();
     responseBaselineEls.clear();
     semanticResponseBaseline = { count: 0, latestText: '' };
     userMessageBaselineEls.clear();
@@ -633,10 +914,12 @@ export function createContentScript(config: ContentScriptConfig): void {
     activePromptText = '';
     lastActivatedInput = undefined;
     sawGenerationActivity = false;
+    sendDispatched = false;
+    lastReportedRequestState = undefined;
   }
 
-  function isActiveRequest(requestId?: string): boolean {
-    return isActiveContentRequest(
+  function isActiveRequest(requestId?: string, generation = responseGeneration): boolean {
+    return generation === responseGeneration && isActiveContentRequest(
       disposed,
       runtimeState,
       scope[marker],
@@ -646,10 +929,10 @@ export function createContentScript(config: ContentScriptConfig): void {
     );
   }
 
-  function scheduleForRequest(callback: () => void, delay: number, requestId = activeRequestId): void {
+  function scheduleForRequest(callback: () => void, delay: number, requestId = activeRequestId, generation = responseGeneration): void {
     const timer = window.setTimeout(() => {
       sendTimeouts.delete(timer);
-      if (isActiveRequest(requestId)) callback();
+      if (isActiveRequest(requestId, generation)) callback();
     }, delay);
     sendTimeouts.add(timer);
   }
@@ -691,7 +974,17 @@ export function createContentScript(config: ContentScriptConfig): void {
       const { text = '' } = (message.payload as { text?: string } | undefined) ?? {};
       void sendMessage(text, message.requestId, message.workflowId)
         .then(() => sendResponse({ ok: true }))
-        .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+        .catch((error) => {
+          // finishWithError has already emitted a scoped RESPONSE_DONE. Keep
+          // that completion authoritative: rejecting the command first makes
+          // the worker discard its own provider error and show an unscoped
+          // system message instead.
+          const settledFailure = failedRequestTombstone;
+          const failureAlreadyReported = Boolean(settledFailure
+            && settledFailure.requestId === message.requestId
+            && settledFailure.workflowId === message.workflowId);
+          sendResponse({ ok: false, error: errorMessage(error), ...(failureAlreadyReported ? { failureAlreadyReported: true } : {}) });
+        });
       return true;
     }
     if (message.action === 'CHECK_STATUS') {
@@ -699,6 +992,38 @@ export function createContentScript(config: ContentScriptConfig): void {
       // explicit probe even when our locally observed status has not changed.
       reportStatus(true);
       sendResponse({ ok: true });
+      return true;
+    }
+    if (message.action === 'QUERY_PROVIDER_REQUEST_STATE' && message.provider === provider) {
+      const requestId = message.requestId;
+      const workflowId = message.workflowId;
+      if (!requestId || !workflowId) {
+        sendResponse({ state: 'idle', submission: 'not_submitted' });
+        return true;
+      }
+      if (waitingForResponse && requestId === activeRequestId && workflowId === activeWorkflowId) {
+        const state: ProviderRequestState = lastReportedRequestState ?? (lastResponseText ? 'generating'
+          : sendDispatched ? 'submission_pending' : 'prompt_inserting');
+        sendResponse({ state, submission: submissionEvidenceForState(state) });
+        return true;
+      }
+      if (recentCompletedRequest
+        && recentCompletedRequest.requestId === requestId
+        && recentCompletedRequest.workflowId === workflowId) {
+        sendResponse({ state: 'response_complete', submission: 'submitted', response: recentCompletedRequest.text });
+        return true;
+      }
+      if (failedRequestTombstone
+        && failedRequestTombstone.requestId === requestId
+        && failedRequestTombstone.workflowId === workflowId) {
+        const submission = failedRequestTombstone.dispatched ? 'uncertain' : 'not_submitted';
+        sendResponse({
+          state: failedRequestTombstone.dispatched ? 'uncertain_submission' : 'recoverable_failure',
+          submission,
+        });
+        return true;
+      }
+      sendResponse({ state: 'idle', submission: 'not_submitted' });
       return true;
     }
     if (message.action === 'STOP_GENERATION' && (!message.provider || message.provider === provider)) {
@@ -756,10 +1081,9 @@ function getInputText(input: Element): string {
   return input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement ? input.value : input.textContent ?? '';
 }
 
-function assertInputLanded(input: Element, expected: string): void {
-  const actual = getInputText(input);
-  if (!actual.trim()) throw new Error('editor remained empty');
-  if (!composerTextMatches(input, expected)) throw new Error('editor text did not match the requested prompt');
+function getExactInputText(input: Element): string {
+  return input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement
+    ? input.value : (input as HTMLElement).innerText || input.textContent || '';
 }
 
 function composerTextMatches(input: Element, expected: string): boolean {

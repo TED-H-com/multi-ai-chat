@@ -50,7 +50,13 @@ Both editions use the providers' web sessions and do not require model API keys.
 | **Coding** | Eight steps covering specification, review, implementation, testing, revision, and acceptance |
 | **Roundtable** | Five rounds × four AIs = twenty contributions |
 
-If a provider fails during Roundtable, the workflow pauses and offers **Retry**, **Skip this turn**, or **Cancel**. Retry uses a fresh request ID. Skip inserts a safe placeholder only into the remaining Roundtable context, so provider error text and stale responses cannot leak into later turns or the transcript.
+If a provider fails during Roundtable or Debate, the workflow pauses and offers **Retry**, **Skip this turn**, or **Cancel**. Retry uses a fresh request ID. Skip marks the contribution as unavailable in the remaining context; it does not invent a response or change the assigned provider. Provider error text is excluded from subsequent prompts.
+
+The interface language is separate from the requested answer language. Workflow instructions honor explicit language or translation requests, then applicable preferences from the same conversation, then the user's task language. Quoted text and previous AI replies remain source material. Conversation replay is bounded, so older messages and long excerpts can be omitted.
+
+Grok submission requires a matching new user message on the provider page. If acceptance cannot be confirmed, check that conversation before choosing Retry: an uncertain send may already have reached the provider. The extension does not automatically repeat an uncertain send, overwrite a different existing draft, or bypass provider usage limits.
+
+Gemini uses the editor's plain-text paste handler and verifies the full prompt, including line breaks and significant whitespace, before one Send activation. A different draft, editor rollback, disabled Send, or uncertain acceptance stops the turn for recovery. It does not patch editor-owned DOM or repeat an ambiguous send.
 
 ## Install
 

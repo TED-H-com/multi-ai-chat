@@ -10,21 +10,36 @@ export function clearedComposerConfirmsSend(
 }
 
 export function contentMatchesPrompt(content: string, prompt: string): boolean {
-  const compact = (value: string) => value.replace(/\s+/g, '');
-  const expected = compact(prompt);
+  const expected = normalizeFormattingWhitespace(prompt);
   if (!expected) return false;
-  if (compact(content) === expected) return true;
-  return visibleMarkdownKey(content) === visibleMarkdownKey(prompt);
+  if (normalizeFormattingWhitespace(content) === expected) return true;
+  const renderedPrompt = visibleMarkdownKey(prompt);
+  return Boolean(renderedPrompt) && visibleMarkdownKey(content) === renderedPrompt;
 }
 
 function visibleMarkdownKey(value: string): string {
-  return value
+  return normalizeFormattingWhitespace(value
     .normalize('NFKC')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/```[^\r\n]*[\r\n]?/g, '')
-    .toLowerCase()
-    .replace(/[\p{P}\p{S}\s]+/gu, '');
+    .replace(/^[ \t]{0,3}`{3,}[^`\r\n]*$/gm, '')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/(?<![\p{L}\p{N}*_])(\*\*|__)(?=\S)([\s\S]*?\S)\1(?![\p{L}\p{N}*_])/gu, '$2')
+    .replace(/(?<![\p{L}\p{N}*])\*(?=\S)([^*\r\n]*?\S)\*(?![\p{L}\p{N}*])/gu, '$1')
+    .replace(/(`+)([^`\r\n]+)\1/g, '$2'));
+}
+
+function normalizeFormattingWhitespace(value: string): string {
+  // Quoted source can contain meaningful spaces. Only surrounding formatting
+  // whitespace is collapsed, and word boundaries are never removed.
+  const literals = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g;
+  let result = '';
+  let end = 0;
+  for (const match of value.matchAll(literals)) {
+    result += value.slice(end, match.index).replace(/\s+/g, ' ') + match[0];
+    end = match.index + match[0].length;
+  }
+  return (result + value.slice(end).replace(/\s+/g, ' ')).trim();
 }
 
 export function matchingPromptCount(messageTexts: readonly string[], prompt: string): number {

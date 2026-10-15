@@ -1,4 +1,4 @@
-import type { AIProvider, StepRecoveryRequest, WorkflowStatusPayload } from '../shared/types';
+import type { AIProvider, ProviderFailureKind, StepRecoveryRequest, WorkflowStatusPayload } from '../shared/types';
 
 export interface StepRecoveryMessageEnvelope {
   provider?: unknown;
@@ -70,7 +70,19 @@ function isStepRecoveryRequest(value: unknown): value is StepRecoveryRequest {
     && typeof request.clientId === 'string'
     && isProvider(request.provider)
     && typeof request.failedRequestId === 'string'
-    && typeof request.reason === 'string';
+    && typeof request.reason === 'string'
+    && (request.failureKind === undefined || isProviderFailureKind(request.failureKind));
+}
+
+function isProviderFailureKind(value: unknown): value is ProviderFailureKind {
+  return value === 'prompt_insertion'
+    || value === 'submission'
+    || value === 'response_timeout'
+    || value === 'response_extraction'
+    || value === 'authentication'
+    || value === 'quota_or_rate_limit'
+    || value === 'navigation'
+    || value === 'unexpected';
 }
 
 function isProvider(value: unknown): value is AIProvider {

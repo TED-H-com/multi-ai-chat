@@ -38,6 +38,7 @@ createContentScript({
   sendButtonSelectors: META_SEND_SELECTORS,
   sendButtonFilter: isMetaSendControl,
   responseSelectors: META_RESPONSE_SELECTORS,
+  responseTracking: 'semantic-latest',
   stopButtonSelectors: META_STOP_SELECTORS,
   stopButtonFilter: isMetaStopControl,
   loginDetector: loginStatus,

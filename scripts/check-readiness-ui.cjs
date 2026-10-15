@@ -34,9 +34,11 @@ function installChromeDouble({ seed, initialConnections }) {
     }
     return Promise.resolve().then(perform);
   };
+  const pendingRecovery = JSON.parse(localStorage.getItem('readiness-fixture-recovery') || 'null');
   window.readinessFixture = {
     connections: initialConnections, requests: [], scope: undefined,
     allowSend: false, sent: [],
+    pendingRecovery, presentedRecoveries: [], recoveryDecisions: [], emitted: [],
     storageCalls: [], storageHold: null,
     metaHostGranted: false, permissionRequests: [], grantPermissionRequest: false,
     pendingStorageCount: () => pendingStorage.length,
@@ -49,7 +51,7 @@ function installChromeDouble({ seed, initialConnections }) {
         else operation.resolve(operation.perform());
       }
     },
-    emit(message) { for (const listener of listeners) listener(message); },
+    emit(message, sender = {}) { this.emitted.push(message); for (const listener of listeners) listener(message, sender); },
     emitPermissions(event, changed = {}) {
       const set = event === 'onAdded' ? permissionAdded : event === 'onRemoved' ? permissionRemoved : undefined;
       if (!set) throw new Error(`Unexpected permission event: ${event}`);
@@ -96,9 +98,26 @@ function installChromeDouble({ seed, initialConnections }) {
         if (message.action === 'GET_CONNECTIONS') {
           fixture.scope = message.payload;
           result = fixture.connections;
+          if (fixture.pendingRecovery) {
+            const recovery = fixture.pendingRecovery;
+            queueMicrotask(() => fixture.emit({
+              action: 'STEP_RECOVERY_REQUIRED',
+              provider: recovery.provider,
+              requestId: recovery.failedRequestId,
+              workflowId: recovery.workflowId,
+              payload: { ...recovery, clientId: message.payload.clientId, sessionId: message.payload.sessionId },
+            }));
+          }
         } else if (message.action === 'OPEN_LOGIN') {
           return new Promise(resolve => pending.push({ provider: message.provider, resolve }));
         } else if (message.action === 'GET_PROVIDER_URLS') result = {};
+        else if (message.action === 'STEP_RECOVERY_PRESENTED') {
+          fixture.presentedRecoveries.push(message.payload);
+          result = { ok: true };
+        } else if (message.action === 'RESOLVE_STEP_RECOVERY') {
+          fixture.recoveryDecisions.push(message.payload);
+          result = { ok: true };
+        }
         else if (message.action === 'SEND_MESSAGE' && fixture.allowSend) {
           fixture.sent.push(message.payload);
           result = { ok: true }; // Sink only: no worker, provider tab or network request.
@@ -147,7 +166,11 @@ async function run(browser) {
   };
   const saveReport = () => fs.writeFileSync(path.join(output, 'RESULTS.json'), JSON.stringify(report, null, 2) + '\n');
   saveReport();
-  for (const language of SUPPORTED_LOCALES) {
+  const fixtureLocales = process.env.READINESS_LOCALES
+    ? SUPPORTED_LOCALES.filter((locale) => process.env.READINESS_LOCALES.split(',').includes(locale))
+    : SUPPORTED_LOCALES;
+  assert.ok(fixtureLocales.length > 0, 'READINESS_LOCALES must name at least one supported locale');
+  for (const language of fixtureLocales) {
     const context = await browser.newContext({ viewport: { width: 420, height: 850 } });
     const passed = [];
     report.locales.push({ language, passed });
@@ -625,6 +648,83 @@ async function run(browser) {
       await page.getByText('⚠️ Error: Simulated delayed send failure', { exact: true }).waitFor();
       assert.equal(await page.locator('textarea').isEnabled(), true);
       passed.push('Cancelled request failures cannot alter a new conversation, while the current request failure remains visible');
+
+      await newChat();
+      await page.evaluate(() => {
+        const send = chrome.runtime.sendMessage;
+        chrome.runtime.sendMessage = (message, callback) => {
+          if (message.action === 'SEND_MESSAGE') {
+            window.readinessFixture.sent.push(message.payload);
+            return Promise.resolve({ ok: true });
+          }
+          return send(message, callback);
+        };
+      });
+      await page.locator('textarea').fill('Please answer in English. Quoted source: 中文資料。');
+      await page.locator('textarea').press('Enter');
+      await page.evaluate(() => {
+        const scope = window.readinessFixture.sent.at(-1);
+        const response = { action: 'RESPONSE_DONE', provider: 'meta', requestId: 'fixture-language-response', workflowId: scope.workflowId };
+        window.readinessFixture.emit({ ...response, payload: 'Untrusted provider injection' }, { tab: { id: 99 } });
+        window.readinessFixture.emit({ ...response, payload: 'Verified English answer' });
+        window.readinessFixture.emit({ ...response, payload: 'Duplicate overwrites the answer' });
+        window.readinessFixture.emit({ ...response, action: 'RESPONSE_CHUNK', payload: 'Late streaming chunk' });
+        window.readinessFixture.emit({ action: 'WORKFLOW_STATUS', payload: { ...scope, key: '', done: true } });
+      });
+      await page.getByText('Verified English answer', { exact: true }).waitFor();
+      assert.equal(await page.getByText('Untrusted provider injection', { exact: true }).count(), 0);
+      assert.equal(await page.getByText('Duplicate overwrites the answer', { exact: true }).count(), 0);
+      assert.equal(await page.getByText('Late streaming chunk', { exact: true }).count(), 0);
+      await page.locator('textarea').fill('Continue with the implementation.');
+      await page.locator('textarea').press('Enter');
+      const followup = await page.evaluate(() => window.readinessFixture.sent.at(-1));
+      assert.match(followup.context, /Please answer in English/);
+      assert.match(followup.context, /中文資料/);
+      assert.doesNotMatch(followup.context, /Verified English answer|Duplicate overwrites|Untrusted provider/);
+      passed.push('Only worker responses are rendered; duplicate final and late chunks cannot replace a completed answer; normal follow-up retains user language preferences independently of UI locale');
+
+      await button('input.stop').click();
+      await newChat();
+      await page.evaluate(() => {
+        const send = chrome.runtime.sendMessage;
+        chrome.runtime.sendMessage = (message, callback) => message.action === 'SEND_MESSAGE'
+          ? Promise.resolve({ ok: false, error: 'Simulated workflow refusal' }) : send(message, callback);
+      });
+      await page.locator('textarea').fill('New conversation without prior preferences.');
+      await page.locator('textarea').press('Enter');
+      await page.getByText('⚠️ Error: Simulated workflow refusal', { exact: true }).waitFor();
+      assert.equal(await page.locator('textarea').isEnabled(), true);
+      passed.push('An explicit negative workflow acknowledgement displays the failure and releases the input');
+
+      // Persist a recovery before recreating the whole side-panel document. The
+      // GET_CONNECTIONS replay is emitted immediately by the Chrome double, so
+      // this verifies the listener is ready before it requests the replay and
+      // that the next-paint receipt belongs to the new panel client.
+      await page.evaluate(() => localStorage.setItem('readiness-fixture-recovery', JSON.stringify({
+        recoveryId: 'recovery-after-remount', workflowId: 'recovery-workflow',
+        provider: 'gemini', failedRequestId: 'recovery-request',
+        reason: 'i18n:{"key":"error.timeout","params":{"provider":"Gemini","seconds":600}}',
+        failureKind: 'response_timeout',
+      })));
+      await page.reload();
+      const recoveryAlert = page.getByRole('alert');
+      await recoveryAlert.waitFor();
+      const recoveryTitle = recoveryAlert.getByText(t('recovery.title', { provider: 'Gemini' }, language), { exact: true });
+      assert.equal(await recoveryTitle.count(), 1);
+      assert.equal(await recoveryAlert.getByText(label('recovery.failure.response_timeout'), { exact: true }).count(), 1);
+      await page.waitForFunction(() => window.readinessFixture.presentedRecoveries.length === 1);
+      const receipt = await page.evaluate(() => window.readinessFixture.presentedRecoveries[0]);
+      assert.equal(receipt.clientId, await page.evaluate(() => window.readinessFixture.scope.clientId));
+      assert.equal(receipt.sessionId, await page.evaluate(() => window.readinessFixture.scope.sessionId));
+      await recoveryAlert.getByRole('button', { name: label('recovery.skip'), exact: true }).click();
+      await page.waitForFunction(() => window.readinessFixture.recoveryDecisions.length === 1);
+      assert.deepEqual(await page.evaluate(() => window.readinessFixture.recoveryDecisions[0]), {
+        recoveryId: receipt.recoveryId, workflowId: receipt.workflowId,
+        sessionId: receipt.sessionId, clientId: receipt.clientId,
+        provider: receipt.provider, failedRequestId: receipt.failedRequestId,
+        action: 'skip',
+      });
+      passed.push('A pending recovery replay after a side-panel remount renders Retry/Skip/Cancel before acknowledgement, records a scoped next-paint receipt, and accepts Skip');
     } catch (error) {
       report.status = 'FAIL';
       report.errors.push(`${language}: ${error.message}`);

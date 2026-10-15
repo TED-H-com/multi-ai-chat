@@ -1,4 +1,6 @@
 interface ClosestCapableElement {
+  disabled?: boolean;
+  readOnly?: boolean;
   getAttribute(name: string): string | null;
   closest(selectors: string): unknown;
   matches?(selectors: string): boolean;
@@ -35,9 +37,19 @@ export const GROK_REQUIRE_MATCHING_USER_MESSAGE_FOR_GENERATION_SIGNALS = true;
 export const GROK_ANCHOR_RESPONSES_AFTER_MATCHING_USER_MESSAGE = true;
 
 export function isGrokComposerInput(element: ClosestCapableElement): boolean {
+  if (element.disabled || element.readOnly || element.getAttribute('disabled') !== null
+    || element.getAttribute('readonly') !== null || element.getAttribute('aria-disabled') === 'true'
+    || element.getAttribute('contenteditable') === 'false') return false;
   return element.getAttribute('aria-label') === 'Ask Grok anything'
     || Boolean(element.closest('[data-testid="chat-input"]'))
     || Boolean(element.matches?.('.ProseMirror[contenteditable="true"]'));
+}
+
+export function isGrokSendControl(element: ClosestCapableElement): boolean {
+  if (element.getAttribute('data-testid') === 'chat-submit') return true;
+  if (element.closest('[data-testid="chat-input"]')) return true;
+  const form = element.closest('form') as QueryCapableContainer | null;
+  return Boolean(form?.querySelector('[data-testid="chat-input"], textarea[aria-label="Ask Grok anything"], .ProseMirror[contenteditable="true"]'));
 }
 
 export function isGrokStopControl(element: ClosestCapableElement): boolean {
@@ -82,8 +94,8 @@ export function grokResponseContentRoot(response: Element): Element {
 export function grokSessionReady(
   hasVisibleComposer: boolean,
   hasVisibleGenerationUi: boolean,
-): boolean {
-  return hasVisibleComposer || hasVisibleGenerationUi;
+): boolean | null {
+  return hasVisibleComposer || hasVisibleGenerationUi ? true : null;
 }
 
 function isActiveThinkingText(text: string): boolean {

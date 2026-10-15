@@ -1,13 +1,14 @@
 import { createContentScript } from './base';
 import {
+  CHATGPT_ACCOUNT_SELECTORS,
   CHATGPT_INPUT_SELECTORS,
   CHATGPT_LOGGED_OUT_SELECTORS,
   CHATGPT_STOP_SELECTORS,
   CHATGPT_USER_MESSAGE_SELECTORS,
-  isChatGptComposerInput,
   isChatGptSendControl,
   isChatGptStopControl,
   isIncompleteChatGptAssistantTurn,
+  isUsableChatGptComposerInput,
 } from './chatgptDom';
 
 function hasVisibleElement(
@@ -18,8 +19,21 @@ function hasVisibleElement(
     if (filter(element) === false) return false;
     if (!(element instanceof HTMLElement)) return true;
     const style = window.getComputedStyle(element);
-    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+    return style.display !== 'none' && style.visibility !== 'hidden'
+      && !(style.opacity !== '' && Number(style.opacity) === 0)
+      && element.getClientRects().length > 0;
   }));
+}
+
+function chatGptLoginStatus(): boolean | null {
+  // Guests also have a composer. Require account UI as well as an editable input,
+  // and reserve Sign in for explicit login/signup evidence.
+  if (hasVisibleElement(CHATGPT_LOGGED_OUT_SELECTORS)) return false;
+  // The account menu can remain mounted inside a collapsed sidebar.
+  if (CHATGPT_ACCOUNT_SELECTORS.some(selector => document.querySelectorAll(selector).length > 0)
+    && hasVisibleElement(CHATGPT_INPUT_SELECTORS, isUsableChatGptComposerInput)) return true;
+  // Hydration, SPA remounts and unrecognized markup are unknown, not a logout.
+  return null;
 }
 
 createContentScript({
@@ -28,7 +42,7 @@ createContentScript({
   // ChatGPT's prompt input (contenteditable div in 2026)
   inputSelectors: CHATGPT_INPUT_SELECTORS,
   requireVisibleInput: true,
-  inputFilter: isChatGptComposerInput,
+  inputFilter: isUsableChatGptComposerInput,
 
   sendButtonSelectors: [
     '[data-testid="send-button"]',
@@ -47,16 +61,16 @@ createContentScript({
     '[data-message-author-role="assistant"] .markdown',
     '[data-message-author-role="assistant"]',
   ],
+  // ChatGPT can remount the latest assistant turn while it transitions from
+  // streaming to complete. Compare semantic turn growth/text rather than DOM
+  // element identity so a visible remounted response is still collected.
+  responseTracking: 'semantic-latest',
 
   stopButtonSelectors: CHATGPT_STOP_SELECTORS,
   stopButtonFilter: isChatGptStopControl,
 
-  loginDetector: () => hasVisibleElement(CHATGPT_INPUT_SELECTORS, isChatGptComposerInput),
-
-  // The signed-out ChatGPT home page can also expose a composer. Prefer explicit account
-  // controls, and do not treat the composer's short SPA remount as a logout.
-  loggedOutDetector: () => hasVisibleElement(CHATGPT_LOGGED_OUT_SELECTORS),
-  loginLossDelay: 2500,
+  loginDetector: chatGptLoginStatus,
+  loggedOutDetector: () => chatGptLoginStatus() === false,
 
   // Detect if ChatGPT is still generating/thinking/searching
   // Key insight: when ChatGPT is still working, a "stop" button is visible

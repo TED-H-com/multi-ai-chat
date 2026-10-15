@@ -11,6 +11,8 @@ import type {
   StepRecoveryDecision,
   StepRecoveryRequest,
   ThemeMode,
+  AutonomousRecoverySettings,
+  WorkflowDiagnosticPayload,
   WorkflowStatusPayload,
 } from '../shared/types';
 import {
@@ -46,6 +48,7 @@ import {
   selectedActiveTargets,
 } from '../shared/providerSelection';
 import { decodeError, ERROR_MARKER } from '../shared/errors';
+import { DEFAULT_AUTONOMOUS_RECOVERY, normalizeAutonomousRecoverySettings } from '../shared/autonomousRecovery';
 import { getProviderReadiness } from '../shared/providerReadiness';
 import { openUnreadyProviders } from './openUnreadyProviders';
 import { createWorkflowCancellation, createWorkflowScope } from '../shared/workflowScope';
@@ -91,12 +94,6 @@ function newConversation(): Conversation {
     createdAt: now,
     updatedAt: now,
   };
-}
-
-function answeredProvidersOf(messages: readonly ChatMessage[]): AIProvider[] {
-  return [...new Set(
-    messages.map((message) => message.provider).filter((provider): provider is AIProvider => Boolean(provider) && (provider as string) !== 'system'),
-  )];
 }
 
 // 錯誤在背景與 content script 只帶鍵值，這裡是唯一翻譯成使用者語言的地方。
@@ -149,12 +146,14 @@ export default function App() {
   const [stepRecovery, setStepRecovery] = useState<StepRecoveryRequest | null>(null);
   const [isResolvingRecovery, setIsResolvingRecovery] = useState(false);
   const [trace, setTrace] = useState<TraceEntry[]>([]);
+  const [traceOpen, setTraceOpen] = useState(false);
   const [showRoleConfig, setShowRoleConfig] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [pendingRoles, setPendingRoles] = useState<Record<string, string>>({});
   const [locale, setLocale] = useState<Locale>(getLocale());
   const [theme, setTheme] = useState<ThemeMode>('system');
+  const [autonomousRecovery, setAutonomousRecovery] = useState<AutonomousRecoverySettings>(DEFAULT_AUTONOMOUS_RECOVERY);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState('');
   const [providerUrls, setProviderUrls] = useState<Partial<Record<AIProvider, string>>>({});
@@ -235,7 +234,7 @@ export default function App() {
     let cancelled = false;
     let retryTimer: number | undefined;
     let attempt = 0;
-    const keys = ['language', 'theme', 'conversations', 'activeConversationId', 'freeTargets', 'standbyProvider'];
+    const keys = ['language', 'theme', 'conversations', 'activeConversationId', 'freeTargets', 'standbyProvider', 'autonomousRecovery'];
     const load = () => {
       chrome.storage.local.get(keys, (stored) => {
         if (cancelled) return;
@@ -252,6 +251,7 @@ export default function App() {
 
         const savedTheme = stored.theme as ThemeMode | undefined;
         if (savedTheme && THEME_MODES.includes(savedTheme)) setTheme(savedTheme);
+        setAutonomousRecovery(normalizeAutonomousRecoverySettings(stored.autonomousRecovery));
 
         const standby = normalizeStandbyProvider(stored.standbyProvider);
         const savedConversations = usableConversations(stored.conversations);
@@ -302,13 +302,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!hydrated || !activeConversationId) return;
-    chrome.runtime.sendMessage({ action: 'GET_CONNECTIONS', payload: { clientId: clientIdRef.current, sessionId: activeConversationId } }, (response) => {
-      if (response) setConnections(response as Record<AIProvider, AIConnection>);
-    });
-  }, [activeConversationId, hydrated]);
-
-  useEffect(() => {
     let stopped = false;
     let port: chrome.runtime.Port | undefined;
     let reconnectTimer: number | undefined;
@@ -337,7 +330,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const listener = (message: { action: string; provider?: AIProvider; requestId?: string; workflowId?: string; payload?: unknown }) => {
+    const listener = (message: { action: string; provider?: AIProvider; requestId?: string; workflowId?: string; payload?: unknown }, sender: chrome.runtime.MessageSender = {}) => {
+      // Content events reach extension pages directly too. Only the background's
+      // validated relay may update the transcript or workflow controls.
+      if (sender.tab || (sender.id && sender.id !== chrome.runtime.id)) return;
       switch (message.action) {
         case 'PROVIDER_SELECTION_UPDATE': {
           const selection = message.payload as { standbyProvider?: unknown; freeTargets?: unknown };
@@ -390,6 +386,13 @@ export default function App() {
           resolvingRecoveryRef.current = false;
           setIsResolvingRecovery(false);
           setIsProcessing(true);
+          // Confirm on the next paint, after the alert and its actions can be
+          // rendered. The worker can then tell an unanswered visible choice
+          // from a recovery request that never reached a side-panel document.
+          window.requestAnimationFrame(() => {
+            if (stepRecoveryRef.current?.recoveryId !== recovery.recoveryId) return;
+            void chrome.runtime.sendMessage({ action: 'STEP_RECOVERY_PRESENTED', payload: recovery }).catch(() => {});
+          });
           break;
         }
         case 'WORKFLOW_STATUS': {
@@ -430,7 +433,25 @@ export default function App() {
           setIsProcessing(true);
           setWorkflowStatus(status);
           const text = formatWorkflowStatus(status);
-          setTrace((current) => current[current.length - 1]?.text === text ? current : [...current, { id: crypto.randomUUID(), text, timestamp: Date.now() }].slice(-25));
+          setTrace((current) => current[current.length - 1]?.text === text ? current : [...current, { id: crypto.randomUUID(), text, timestamp: Date.now() }]);
+          break;
+        }
+        case 'WORKFLOW_DIAGNOSTIC': {
+          const diagnostic = message.payload as WorkflowDiagnosticPayload;
+          if (!diagnostic || diagnostic.clientId !== clientIdRef.current || diagnostic.sessionId !== activeConversationIdRef.current
+            || diagnostic.workflowId !== activeWorkflowIdRef.current || diagnostic.provider !== message.provider) break;
+          const providerName = AI_PROVIDERS[diagnostic.provider].name;
+          const role = diagnostic.role ? ` · ${t(`role.${diagnostic.role}`)}` : '';
+          const attempt = diagnostic.attempt ? ` · attempt ${diagnostic.attempt}` : '';
+          const length = diagnostic.responseLength === undefined ? '' : ` · ${diagnostic.responseLength} chars`;
+          const failure = diagnostic.failureKind ? ` · ${diagnostic.failureKind}` : '';
+          const code = diagnostic.failureCode ? ` · ${diagnostic.failureCode}` : '';
+          const candidates = diagnostic.responseCandidateCount === undefined
+            ? ''
+            : ` · candidates ${diagnostic.responseCandidateCount}${diagnostic.semanticResponseCandidateCount === undefined ? '' : `/${diagnostic.semanticResponseCandidateCount}`}`;
+          const observed = diagnostic.generationObserved === undefined ? '' : ` · generation ${diagnostic.generationObserved ? 'seen' : 'not seen'}`;
+          const text = `${providerName}${role} · ${diagnostic.stage}${attempt}${length}${failure}${code}${candidates}${observed}`;
+          setTrace((current) => [...current, { id: crypto.randomUUID(), text, timestamp: Date.now() }]);
           break;
         }
       }
@@ -438,6 +459,23 @@ export default function App() {
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, [applyProviderSelection]);
+
+  useEffect(() => {
+    if (!hydrated || !activeConversationId) return;
+    // The message listener above must be installed before this asks the worker
+    // to replay a pending recovery. Otherwise an immediately replayed message
+    // can be dropped during a side-panel remount.
+    chrome.runtime.sendMessage({ action: 'GET_CONNECTIONS', payload: { clientId: clientIdRef.current, sessionId: activeConversationId } }, (response) => {
+      if (response) setConnections(response as Record<AIProvider, AIConnection>);
+    });
+  }, [activeConversationId, hydrated]);
+
+  // Persist the expanded trace after a run finishes. A controlled `open`
+  // attribute tied only to isProcessing made completed failure details close on
+  // every subsequent render.
+  useEffect(() => {
+    if (isProcessing) setTraceOpen(true);
+  }, [isProcessing]);
 
   useEffect(() => {
     if (!hydrated || !activeConversationId) return;
@@ -481,6 +519,7 @@ export default function App() {
 
   const changeMode = (nextMode: ChatMode) => {
     if (isProcessing) return;
+    setContextNeedsReplay(Boolean(messages.length));
     setMode(nextMode);
     setShowRoleConfig(false);
     const nextRoles = nextMode !== 'free'
@@ -500,7 +539,7 @@ export default function App() {
     if (activeWorkflowIdRef.current) ignoreWorkflow(activeWorkflowIdRef.current, ignoredWorkflowIdsRef);
     const workflowScope = createWorkflowScope(activeConversationId, clientIdRef.current);
     activeWorkflowIdRef.current = workflowScope.workflowId;
-    const context = contextNeedsReplay ? buildConversationReplayContext(messages) : undefined;
+    const context = buildConversationReplayContext(messages, { includeAssistant: contextNeedsReplay });
     setMessages((current) => [...current, { id: `user-${crypto.randomUUID()}`, role: 'user', content: text, timestamp: Date.now() }]);
     setIsProcessing(true);
     setWorkflowStatus(null);
@@ -519,15 +558,19 @@ export default function App() {
         mode,
         roles: mode === 'free' ? undefined : roles,
         targets: mode === 'free' ? freeTargets : undefined,
+        recovery: autonomousRecovery,
       },
+    }).then((response: { ok?: boolean; error?: string } | undefined) => {
+      if (response?.ok === false) throw new Error(response.error ?? 'The workflow was not accepted');
     }).catch((error) => {
       if (conversationRevisionRef.current !== revision || activeWorkflowIdRef.current !== workflowScope.workflowId
         || activeConversationIdRef.current !== workflowScope.sessionId) return;
       activeWorkflowIdRef.current = undefined;
+      setContextNeedsReplay(true);
       setMessages((current) => [...current, { id: `system-${crypto.randomUUID()}`, role: 'ai', provider: 'system' as AIProvider, content: `${ERROR_MARKER} ${String(error)}`, timestamp: Date.now() }]);
       setIsProcessing(false);
     });
-  }, [activeConversationId, contextNeedsReplay, freeTargets, isProcessing, messages, mode, roles]);
+  }, [activeConversationId, autonomousRecovery, contextNeedsReplay, freeTargets, isProcessing, messages, mode, roles]);
 
   const stopWorkflow = useCallback(() => {
     conversationRevisionRef.current += 1;
@@ -600,7 +643,6 @@ export default function App() {
     conversationRevisionRef.current += 1;
     if (activeWorkflowIdRef.current) ignoreWorkflow(activeWorkflowIdRef.current, ignoredWorkflowIdsRef);
     activeWorkflowIdRef.current = undefined;
-    const leavingMessages = persistInputsRef.current.messages;
     const committed = commitCurrentConversation();
     // notes: 已經有空對話就重用它，只更新時間，避免堆出一串重複的「新對話」
     const reusable = committed.find((candidate) => !candidate.messages?.length);
@@ -635,7 +677,9 @@ export default function App() {
     closeDrawer();
     setConnectionsOpen(true);
     persistNow(nextConversations, conversation.id);
-    chrome.runtime.sendMessage({ action: 'RESET_PROVIDER_SESSIONS', payload: { providers: answeredProvidersOf(leavingMessages) } }).catch(() => {});
+    // A cancelled or rejected send may have changed a provider conversation even
+    // when it never produced an app transcript entry.
+    chrome.runtime.sendMessage({ action: 'RESET_PROVIDER_SESSIONS', payload: { providers: activeProviders(standbyProviderRef.current) } }).catch(() => {});
   };
 
   const selectConversation = (conversation: Conversation) => {
@@ -644,7 +688,6 @@ export default function App() {
     conversationRevisionRef.current += 1;
     if (activeWorkflowIdRef.current) ignoreWorkflow(activeWorkflowIdRef.current, ignoredWorkflowIdsRef);
     activeWorkflowIdRef.current = undefined;
-    const leavingMessages = persistInputsRef.current.messages;
     const committed = commitCurrentConversation();
     const nextRoles = repairRoles(conversation.roles ?? (conversation.mode === 'free' ? DEFAULT_DEBATE_ROLES : DEFAULT_ROLES[conversation.mode]), standbyProvider);
     persistInputsRef.current = {
@@ -667,7 +710,7 @@ export default function App() {
     persistNow(committed, conversation.id);
     const action = conversation.providerUrls && Object.keys(conversation.providerUrls).length
       ? { action: 'RESTORE_PROVIDER_SESSIONS', payload: { urls: conversation.providerUrls } }
-      : { action: 'RESET_PROVIDER_SESSIONS', payload: { providers: answeredProvidersOf(leavingMessages) } };
+      : { action: 'RESET_PROVIDER_SESSIONS', payload: { providers: activeProviders(standbyProviderRef.current) } };
     chrome.runtime.sendMessage(action).catch(() => {});
   };
 
@@ -700,6 +743,12 @@ export default function App() {
     void chrome.storage.local.set({ theme: nextTheme });
   };
 
+  const changeAutonomousRecovery = (next: AutonomousRecoverySettings) => {
+    const normalized = normalizeAutonomousRecoverySettings(next);
+    setAutonomousRecovery(normalized);
+    void chrome.storage.local.set({ autonomousRecovery: normalized });
+  };
+
   const changeStandbyProvider = async (next: AIProvider) => {
     const result = await chrome.runtime.sendMessage({
       action: 'SET_STANDBY_PROVIDER', payload: { standbyProvider: next },
@@ -710,6 +759,7 @@ export default function App() {
 
   const toggleTarget = (provider: AIProvider) => {
     if (isProcessing) return;
+    setContextNeedsReplay(Boolean(messages.length));
     setFreeTargets((current) => {
       const next = current.includes(provider) ? current.filter((candidate) => candidate !== provider) : [...current, provider];
       const safeNext = next.length ? next : [provider];
@@ -722,8 +772,15 @@ export default function App() {
     if (!hydrated || isProcessing || mode !== 'free') return;
     const targets = readyActiveTargets(connections, standbyProviderRef.current);
     if (!targets.length) return;
+    setContextNeedsReplay(Boolean(messages.length));
     setFreeTargets(targets);
     void chrome.storage.local.set({ freeTargets: targets });
+  };
+
+  const changeRoles = (nextRoles: ModeRoles) => {
+    if (isProcessing) return;
+    setRoles(nextRoles);
+    setContextNeedsReplay(Boolean(messages.length));
   };
 
   const openLogin = async (provider: AIProvider): Promise<void> => {
@@ -807,12 +864,12 @@ export default function App() {
             <h1 className="truncate text-sm font-bold text-slate-900">{t('app.title')}</h1>
             <p className="truncate text-xs text-slate-500">{t('app.subtitle')}</p>
           </div>
-          <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">{connectedCount}/4 {t('app.connected')}</span>
-          <button type="button" onClick={() => setIsSettingsOpen(true)} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-300 text-xl leading-none text-slate-700 hover:bg-slate-100" title={t('app.settings')} aria-label={t('app.settings')}>⚙</button>
+          <span className="shrink-0 whitespace-nowrap rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">{connectedCount}/4 {t('app.connected')}</span>
+          <button type="button" onClick={() => setIsSettingsOpen(true)} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-300 text-xl leading-none text-slate-700 hover:bg-slate-100" title={t('app.settings')} aria-label={t('app.settings')}>⚙</button>
         </div>
       </header>
 
-      <section className="min-h-0 max-h-[46vh] shrink overflow-y-auto border-b border-slate-200 bg-white px-3 py-3">
+      <section className="min-h-0 max-h-[46vh] flex-none overflow-y-auto overscroll-contain border-b border-slate-200 bg-white px-3 py-3">
         <ModeSelector mode={mode} onModeChange={changeMode} disabled={isProcessing} />
 
         {mode === 'free' && (
@@ -835,8 +892,13 @@ export default function App() {
 
         {mode !== 'free' && (
           <div className="mt-2">
-            <button type="button" onClick={() => setShowRoleConfig((current) => !current)} className="text-xs font-medium text-sky-700 hover:text-sky-900">{showRoleConfig ? t('roles.toggle.hide') : t('roles.toggle.show')}</button>
-            {showRoleConfig && <RoleConfig providers={providers} mode={mode} roles={roles} onRolesChange={setRoles} disabled={!hydrated || isProcessing} />}
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <p className="min-w-0 break-words text-[11px] leading-relaxed text-slate-600">
+                {Object.entries(roles as unknown as Record<string, AIProvider>).map(([role, provider]) => `${t(`role.${role}`)}: ${AI_PROVIDERS[provider].name}`).join(' · ')}
+              </p>
+              {mode !== 'debate' && <button type="button" onClick={() => setShowRoleConfig((current) => !current)} className="shrink-0 text-xs font-medium text-sky-700 hover:text-sky-900">{showRoleConfig ? t('roles.toggle.hide') : t('roles.toggle.show')}</button>}
+            </div>
+            {((mode === 'debate') || showRoleConfig) && <RoleConfig providers={providers} mode={mode} roles={roles} onRolesChange={changeRoles} disabled={!hydrated || isProcessing} />}
           </div>
         )}
 
@@ -852,15 +914,20 @@ export default function App() {
           </div>
         </details>
 
-        <details className="mt-2 rounded-lg border border-slate-200 bg-white" open={isProcessing}>
+        <details className="mt-2 rounded-lg border border-slate-200 bg-white" open={isProcessing || traceOpen} onToggle={(event) => setTraceOpen(event.currentTarget.open)}>
           <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700"><span className={`mr-2 inline-block h-2 w-2 rounded-full ${isProcessing ? 'animate-pulse bg-sky-500' : 'bg-emerald-500'}`} />{t('trace.title')} · <span className="font-normal text-slate-500">{currentStatus}</span></summary>
-          {trace.length > 0 && <div className="max-h-28 space-y-1 overflow-y-auto border-t border-slate-200 p-2.5">{trace.slice(-8).map((entry) => <div key={entry.id} className="truncate text-[11px] text-slate-600">{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {entry.text}</div>)}</div>}
+          {workflowStatus?.progress && <div className="border-t border-slate-100 px-2.5 py-1.5 text-[11px] text-slate-600">
+            {t('workflow.progress', { completed: workflowStatus.progress.completed, total: workflowStatus.progress.total, attempts: workflowStatus.progress.recoveryAttempts })}
+            {workflowStatus.progress.lastCheckpointAt && <span className="ml-2 text-slate-400">{t('workflow.checkpoint', { time: new Date(workflowStatus.progress.lastCheckpointAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}</span>}
+          </div>}
+          {trace.length > 0 && <div className="space-y-1 border-t border-slate-200 p-2.5">{trace.map((entry) => <div key={entry.id} className="break-words text-[11px] leading-relaxed text-slate-600">{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {entry.text}</div>)}</div>}
           {stepRecovery && (
             <div role="alert" className="border-t border-amber-200 bg-amber-50 p-2.5">
               <div className="text-xs font-semibold text-amber-900">{t('recovery.title', { provider: AI_PROVIDERS[stepRecovery.provider].name })}</div>
+              {stepRecovery.failureKind && <div className="mt-1 text-[11px] font-medium text-amber-900">{t(`recovery.failure.${stepRecovery.failureKind}`)}</div>}
               <div className="mt-1 break-words text-[11px] leading-relaxed text-amber-800">{humanizeError(stepRecovery.reason)}</div>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                <button type="button" disabled={isResolvingRecovery} onClick={() => void resolveStepRecovery('retry')} className="rounded-lg bg-sky-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-sky-800 disabled:opacity-50">{t('recovery.retry')}</button>
+                <button type="button" disabled={isResolvingRecovery || stepRecovery.retryAllowed === false} onClick={() => void resolveStepRecovery('retry')} className="rounded-lg bg-sky-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-sky-800 disabled:opacity-50">{t('recovery.retry')}</button>
                 <button type="button" disabled={isResolvingRecovery} onClick={() => void resolveStepRecovery('skip')} className="rounded-lg border border-amber-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50">{t('recovery.skip')}</button>
                 <button type="button" disabled={isResolvingRecovery} onClick={() => void resolveStepRecovery('cancel')} className="rounded-lg border border-red-300 bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50">{t('recovery.cancel')}</button>
               </div>
@@ -872,7 +939,8 @@ export default function App() {
       <ChatArea messages={messages} mode={mode} conversationId={activeConversationId} />
 
       <div className="flex-none border-t border-slate-200 bg-white px-3 py-1.5">
-        <div className="flex justify-end gap-3 text-xs text-slate-500">
+        <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs text-slate-500">
+          <button type="button" onClick={startNewConversation} disabled={isProcessing} className="hover:text-sky-700 disabled:opacity-30">{t('app.new')}</button>
           <button type="button" onClick={exportConversation} disabled={!messages.length} className="hover:text-sky-700 disabled:opacity-30">{t('app.export')}</button>
           <button type="button" onClick={() => void publishConversation()} disabled={!messages.length || isPublishing} className="hover:text-sky-700 disabled:opacity-30">{isPublishing ? t('publish.publishing') : t('app.publish')}</button>
         </div>
@@ -907,7 +975,7 @@ export default function App() {
         </div>
       )}
 
-      <SettingsModal isOpen={isSettingsOpen} locale={locale} onLocaleChange={changeLocale} theme={theme} onThemeChange={changeTheme} standbyProvider={standbyProvider} onStandbyChange={changeStandbyProvider} providerSelectionDisabled={!hydrated || isProcessing} onClose={() => setIsSettingsOpen(false)} />
+      <SettingsModal isOpen={isSettingsOpen} locale={locale} onLocaleChange={changeLocale} theme={theme} onThemeChange={changeTheme} autonomousRecovery={autonomousRecovery} onAutonomousRecoveryChange={changeAutonomousRecovery} standbyProvider={standbyProvider} onStandbyChange={changeStandbyProvider} providerSelectionDisabled={!hydrated || isProcessing} onClose={() => setIsSettingsOpen(false)} />
     </div>
   );
 }
@@ -924,6 +992,7 @@ function upsertStreamingMessage(
   pendingRolesRef: React.MutableRefObject<Record<string, string>>,
   setPendingRoles: React.Dispatch<React.SetStateAction<Record<string, string>>>,
 ): ChatMessage[] {
+  if (requestId && messages.some(message => message.requestId === requestId && !message.id.endsWith('-streaming'))) return messages;
   const existing = messages.find((message) => message.requestId === requestId && message.id.endsWith('-streaming'));
   if (existing) return messages.map((message) => message.id === existing.id ? { ...message, content } : message);
   const modeRole = consumePendingRole(provider, requestId, pendingRolesRef, setPendingRoles);
@@ -938,6 +1007,7 @@ function finalizeMessage(
   pendingRolesRef: React.MutableRefObject<Record<string, string>>,
   setPendingRoles: React.Dispatch<React.SetStateAction<Record<string, string>>>,
 ): ChatMessage[] {
+  if (requestId && messages.some(message => message.requestId === requestId && !message.id.endsWith('-streaming'))) return messages;
   const existing = messages.find((message) => message.requestId === requestId && message.id.endsWith('-streaming'));
   if (existing) return messages.map((message) => message.id === existing.id ? { ...message, id: message.id.replace(/-streaming$/, ''), content } : message);
   const modeRole = consumePendingRole(provider, requestId, pendingRolesRef, setPendingRoles);

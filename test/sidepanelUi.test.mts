@@ -258,6 +258,8 @@ test('open Settings dialog describes loading token and wires token error ids', (
   assert.match(markup, /id="settings-token-status" role="status"/);
   assert.match(markup, /id="standby-provider"[^>]*aria-describedby="standby-help"/);
   assert.match(markup, /id="standby-help"/);
+  assert.match(markup, /id="recovery-enabled"[^>]*type="checkbox"/);
+  assert.match(markup, /id="recovery-policy"[^>]*disabled=""/);
   const source = readFileSync(new URL('../src/sidepanel/components/SettingsModal.tsx', import.meta.url), 'utf8');
   assert.match(source, /shared\/metaOrigins/);
   assert.doesNotMatch(source, /background\/metaHostAccess/);
@@ -356,6 +358,19 @@ test('mode selector keeps a named group with exactly one pressed mode', () => {
   assert.equal((markup.match(/aria-pressed="true"/g) ?? []).length, 1);
   assert.equal((markup.match(/aria-pressed="false"/g) ?? []).length, 4);
   assert.match(markup, />Coding<\/span>/);
+});
+
+test('workflow controls retain every trace entry in one reachable scroll container and keep New chat reachable', () => {
+  const source = readFileSync(new URL('../src/sidepanel/App.tsx', import.meta.url), 'utf8');
+  assert.match(source, /Object\.entries\(roles as unknown as Record<string, AIProvider>\)/);
+  assert.match(source, /break-words text-\[11px\] leading-relaxed text-slate-600/);
+  assert.match(source, /const \[traceOpen, setTraceOpen\] = useState\(false\)/);
+  assert.match(source, /open=\{isProcessing \|\| traceOpen\}/);
+  assert.match(source, /onToggle=\{\(event\) => setTraceOpen\(event\.currentTarget\.open\)\}/);
+  assert.match(source, /max-h-\[46vh\] flex-none overflow-y-auto overscroll-contain/);
+  assert.doesNotMatch(source, /trace\.slice\(/);
+  assert.doesNotMatch(source, /max-h-56[^\n]*overflow-y-auto[^\n]*\{trace\.map/);
+  assert.match(source, /onClick=\{startNewConversation\}[^>]*>\{t\('app\.new'\)\}/);
 });
 
 test('ja, de and ko no longer fall back to English for product strings zh already translated', () => {

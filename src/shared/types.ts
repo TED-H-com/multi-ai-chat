@@ -1,3 +1,5 @@
+import type { SubmissionEvidence } from './autonomousRecovery';
+
 // === AI Providers ===
 
 export type AIProvider = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'meta';
@@ -79,9 +81,59 @@ export interface WorkflowStatusPayload {
   clientId?: string;
   done?: boolean;
   cancelled?: boolean;
+  progress?: {
+    completed: number;
+    total: number;
+    recoveryAttempts: number;
+    lastCheckpointAt?: number;
+  };
+}
+
+// Lifecycle telemetry intentionally carries only routing and state metadata.
+// It never contains prompts, provider response text, cookies, or credentials.
+export interface WorkflowDiagnosticPayload {
+  workflowId: string;
+  turnId: string;
+  provider: AIProvider;
+  stage: string;
+  requestId?: string;
+  role?: string;
+  attempt?: number;
+  submission?: SubmissionEvidence;
+  failureKind?: ProviderFailureKind;
+  // Encoded error keys and aggregate page observations are safe to display in
+  // the developer trace. They must never include prompt or response text.
+  failureCode?: string;
+  responseLength?: number;
+  responseCandidateCount?: number;
+  semanticResponseCandidateCount?: number;
+  currentResponseLength?: number;
+  generationObserved?: boolean;
+  sessionId?: string;
+  clientId?: string;
 }
 
 export type StepRecoveryAction = 'retry' | 'skip' | 'cancel';
+
+export type AutonomousRecoveryPolicy = 'safe' | 'strict' | 'best-effort';
+
+export interface AutonomousRecoverySettings {
+  enabled: boolean;
+  policy: AutonomousRecoveryPolicy;
+}
+
+// This is deliberately a small, sanitized classification. It is safe to show in
+// the side panel and lets recovery diagnostics identify the failed stage without
+// serializing prompts, provider responses, or browser-session data.
+export type ProviderFailureKind =
+  | 'prompt_insertion'
+  | 'submission'
+  | 'response_timeout'
+  | 'response_extraction'
+  | 'authentication'
+  | 'quota_or_rate_limit'
+  | 'navigation'
+  | 'unexpected';
 
 export interface StepRecoveryRequest {
   recoveryId: string;
@@ -91,6 +143,10 @@ export interface StepRecoveryRequest {
   provider: AIProvider;
   failedRequestId: string;
   reason: string;
+  failureKind?: ProviderFailureKind;
+  // A retry is disabled when Send may already have been accepted. Skipping or
+  // cancelling remains available, but the extension must never replay it.
+  retryAllowed?: boolean;
 }
 
 export interface StepRecoveryDecision {
@@ -120,9 +176,13 @@ export type MessageAction =
   | 'RESTORE_PROVIDER_SESSIONS'
   | 'CONNECTIONS_UPDATE'
   | 'WORKFLOW_STATUS'
+  | 'WORKFLOW_DIAGNOSTIC'
   | 'ROLE_ASSIGNMENT'
   | 'STEP_RECOVERY_REQUIRED'
+  | 'STEP_RECOVERY_PRESENTED'
   | 'RESOLVE_STEP_RECOVERY'
+  | 'PROVIDER_REQUEST_STATE'
+  | 'QUERY_PROVIDER_REQUEST_STATE'
   | 'CANCEL_WORKFLOW'
   | 'STOP_GENERATION'
   | 'PUBLISH_HACKMD';

@@ -326,6 +326,9 @@
   .mb-2 {
     margin-bottom: calc(var(--spacing) * 2);
   }
+  .ml-2 {
+    margin-left: calc(var(--spacing) * 2);
+  }
   .ml-8 {
     margin-left: calc(var(--spacing) * 8);
   }
@@ -370,9 +373,6 @@
   }
   .h-screen {
     height: 100vh;
-  }
-  .max-h-28 {
-    max-height: calc(var(--spacing) * 28);
   }
   .max-h-\[46vh\] {
     max-height: 46vh;
@@ -439,9 +439,6 @@
   }
   .flex-none {
     flex: none;
-  }
-  .shrink {
-    flex-shrink: 1;
   }
   .shrink-0 {
     flex-shrink: 0;
@@ -521,6 +518,12 @@
     margin-block-start: calc(calc(var(--spacing) * 3) * var(--tw-space-y-reverse));
     margin-block-end: calc(calc(var(--spacing) * 3) * calc(1 - var(--tw-space-y-reverse)));
   }
+  .gap-x-3 {
+    column-gap: calc(var(--spacing) * 3);
+  }
+  .gap-y-1 {
+    row-gap: var(--spacing);
+  }
   .truncate {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -534,6 +537,9 @@
   }
   .overflow-y-auto {
     overflow-y: auto;
+  }
+  .overscroll-contain {
+    overscroll-behavior: contain;
   }
   .rounded-2xl {
     border-radius: var(--radius-2xl);
@@ -848,6 +854,9 @@
   .hyphens-auto {
     -webkit-hyphens: auto;
     hyphens: auto;
+  }
+  .whitespace-nowrap {
+    white-space: nowrap;
   }
   .whitespace-pre-wrap {
     white-space: pre-wrap;
