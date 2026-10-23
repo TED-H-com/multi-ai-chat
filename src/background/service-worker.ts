@@ -595,7 +595,7 @@ async function deliverToTab(
       // Last resort failed: the tab cannot run our content script at all. Surface it —
       // the browser's message (e.g. "Blocked") is the only clue to why the provider
       // never reports its status.
-      console.error(`Failed to inject the ${provider} content script into tab ${tabId}`, injectError);
+      console.error(`Failed to inject the ${provider} content script into tab ${tabId}: ${injectError instanceof Error ? injectError.message : 'Unknown error'}`);
       throw firstError;
     }
     try {
@@ -1994,9 +1994,9 @@ function syncMetaHostAccessWithChrome(): Promise<MetaHostAccessSyncResult> {
 function reconcileMetaHostAccess(): Promise<void> {
   return enqueueMetaHostAccess(async () => {
     try {
-      console.info('Meta host access', await syncMetaHostAccessWithChrome());
+      await syncMetaHostAccessWithChrome();
     } catch (error: unknown) {
-      console.error('Meta host access sync failed', error);
+      console.error(`Meta host access sync failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
     await providerSelectionReady;
     const permitted = await chrome.permissions.contains({ origins: [...META_ORIGINS] });
@@ -2007,7 +2007,7 @@ function reconcileMetaHostAccess(): Promise<void> {
 
 function trackMetaHostAccess(): void {
   void reconcileMetaHostAccess().catch((error: unknown) => {
-    console.error('Could not reconcile Meta AI host access', error);
+    console.error(`Could not reconcile Meta AI host access: ${error instanceof Error ? error.message : 'Unknown error'}`);
   });
 }
 

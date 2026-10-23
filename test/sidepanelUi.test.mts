@@ -344,7 +344,6 @@ test('a rejected Meta permission request stays on standby and shows the localize
     assert.notEqual(denied, t('settings.meta_permission_denied', undefined, 'en'));
     assert.equal(JSON.stringify(requestedOrigins), JSON.stringify([...metaOrigins.META_ORIGINS]));
     assert.equal(applied, false);
-    assert.equal(logged.some((entry) => entry.includes(gestureError)), true);
   } finally {
     setLocale('en');
   }

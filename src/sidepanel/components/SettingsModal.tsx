@@ -111,7 +111,7 @@ export default function SettingsModal({ isOpen, locale, onLocaleChange, theme, o
     void chrome.permissions.contains({ origins: [...META_ORIGINS] }).then((granted) => {
       if (session.active) metaAccessRef.current = granted;
     }, (error: unknown) => {
-      console.error('Could not check Meta AI host access', error);
+      console.error(`Could not check Meta AI host access: ${error instanceof Error ? error.message : 'Unknown error'}`);
     });
     return () => {
       session.active = false;
@@ -195,7 +195,7 @@ export default function SettingsModal({ isOpen, locale, onLocaleChange, theme, o
       try {
         requested = chrome.permissions.request({ origins: [...META_ORIGINS] });
       } catch (error: unknown) {
-        console.error('Could not request Meta AI host access', error);
+        console.error(`Could not request Meta AI host access: ${error instanceof Error ? error.message : 'Unknown error'}`);
         requested = Promise.resolve(false);
       }
     }
@@ -208,7 +208,7 @@ export default function SettingsModal({ isOpen, locale, onLocaleChange, theme, o
           granted = await requested;
         } catch (error: unknown) {
           // A rejected request (for example, no user gesture) is "not granted", same as resolving false.
-          console.error('Could not request Meta AI host access', error);
+          console.error(`Could not request Meta AI host access: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
         metaAccessRef.current = granted;
         const after = planMetaHostPermission({
