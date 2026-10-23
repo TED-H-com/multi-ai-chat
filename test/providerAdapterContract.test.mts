@@ -86,3 +86,14 @@ test('Gemini sends its verified first click without a background-tab timer, whil
   assert.equal(gemini.immediateSendAfterInsertion, true);
   assert.equal(chatgpt.responseTracking, 'semantic-latest');
 });
+
+test('multi-provider API abstraction ensures required properties are present', () => {
+  for (const provider of ['chatgpt', 'gemini', 'grok', 'meta', 'claude']) {
+    const config = captureAdapter(provider);
+    assert.equal(config.provider, provider);
+    assert.ok(config.inputSelectors, `${provider} inputSelectors is missing`);
+    assert.ok(config.sendButtonSelectors, `${provider} sendButtonSelectors is missing`);
+    assert.ok(config.responseSelectors, `${provider} responseSelectors is missing`);
+    assert.ok(config.loginDetector, `${provider} loginDetector is missing`);
+  }
+});

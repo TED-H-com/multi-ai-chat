@@ -397,3 +397,65 @@ test('ja, de and ko no longer fall back to English for product strings zh alread
     assert.equal(t(key, undefined, 'ja'), t(key, undefined, 'en'));
   }
 });
+
+test('SettingsModal manages local session state and avoids late updates', async () => {
+  setLocale('en');
+  const logged: unknown[][] = [];
+  const stateUpdates: unknown[] = [];
+  let tokenSet: string | null = null;
+  const reactImpl = new Proxy(React, {
+    get(target, prop, receiver) {
+      if (prop === 'useState') {
+        return (initial: unknown) => {
+          const [value, setValue] = target.useState(initial);
+          return [value, (next: unknown) => {
+            stateUpdates.push(next);
+            return setValue(next);
+          }];
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    }
+  });
+
+  // HackMD mock that resolves *after* the modal is closed
+  let resolveToken: (token: string | null) => void;
+  const tokenPromise = new Promise<string | null>((resolve) => { resolveToken = resolve; });
+
+  const SettingsModal = loadComponent('../src/sidepanel/components/SettingsModal.tsx', reactImpl as typeof React, {
+    console: { error: (...args: unknown[]) => { logged.push(args); } },
+    window: { setTimeout, clearTimeout },
+    chrome: {
+      permissions: {
+        contains: () => new Promise(() => {}),
+        onAdded: { addListener() {}, removeListener() {} },
+        onRemoved: { addListener() {}, removeListener() {} },
+      }
+    },
+    '../../shared/hackmd': {
+      getHackMDToken: () => tokenPromise,
+      setHackMDToken: async () => {},
+      clearHackMDToken: async () => {},
+    }
+  }).default;
+
+  // Mount the modal
+  renderToStaticMarkup(React.createElement(SettingsModal, {
+    isOpen: true, locale: 'en', onLocaleChange: () => {}, theme: 'system', onThemeChange: () => {},
+    standbyProvider: 'meta', onStandbyChange: async () => {}, providerSelectionDisabled: false, onClose: () => {},
+  }));
+
+  // Unmount the modal (isOpen: false triggers unmount-like logic if we don't fully tear down the DOM)
+  renderToStaticMarkup(React.createElement(SettingsModal, {
+    isOpen: false, locale: 'en', onLocaleChange: () => {}, theme: 'system', onThemeChange: () => {},
+    standbyProvider: 'meta', onStandbyChange: async () => {}, providerSelectionDisabled: false, onClose: () => {},
+  }));
+
+  // Resolve the token after unmount
+  resolveToken!('late_token');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // The state update ('ready', 'late_token') should NOT happen because session.active is false
+  assert.equal(stateUpdates.includes('late_token'), false);
+  assert.equal(stateUpdates.includes('ready'), false);
+});
