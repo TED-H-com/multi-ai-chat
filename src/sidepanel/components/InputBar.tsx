@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { t } from '../../shared/i18n';
+import type { ChatMode } from '../../shared/types';
 
 interface Props {
+  mode?: ChatMode;
   onSend: (text: string) => void;
   onCancel: () => void;
   disabled: boolean;
@@ -12,7 +14,7 @@ interface Props {
   readinessOpenError?: string;
 }
 
-export default function InputBar({ onSend, onCancel, disabled, isProcessing, readinessNotice, onOpenUnready, isOpeningUnready = false, readinessOpenError }: Props) {
+export default function InputBar({ mode = 'free', onSend, onCancel, disabled, isProcessing, readinessNotice, onOpenUnready, isOpeningUnready = false, readinessOpenError }: Props) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef('');
@@ -67,6 +69,7 @@ export default function InputBar({ onSend, onCancel, disabled, isProcessing, rea
           className="block max-h-[140px] min-h-[52px] w-full resize-none bg-transparent px-2 py-1 text-sm leading-relaxed text-slate-900 outline-hidden placeholder:text-slate-500 disabled:cursor-not-allowed"
         />
         <div className="mt-1 flex items-center justify-end gap-2">
+          <span aria-label={`${t('mode.selector')}: ${t(`mode.${mode}`)}`} className="mr-auto rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-800">{t(`mode.${mode}`)}</span>
           {isProcessing && <button type="button" onClick={onCancel} className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100">{t('input.stop')}</button>}
           <button type="button" onClick={submit} disabled={disabled || !text.trim()} className="shrink-0 rounded-lg bg-sky-700 px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500">{t('input.send')}</button>
         </div>

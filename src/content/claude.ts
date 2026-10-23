@@ -1,4 +1,5 @@
 import { createContentScript } from './base';
+import { composerMatchesPrompt, readComposerText } from './composerText';
 
 function isVisible(element: Element): boolean {
   if (!(element instanceof HTMLElement)) return true;
@@ -42,6 +43,12 @@ createContentScript({
   requireVisibleInput: true,
   inputFilter: isUsableClaudeComposer,
   preserveExistingDraft: true,
+  readInputText: readComposerText,
+  inputMatchesPrompt: composerMatchesPrompt,
+  sendConfirmation: 'single-activation',
+  responseTracking: 'semantic-latest',
+  userMessageSelectors: ['[data-testid="user-message"]'],
+  userMessageTracking: 'semantic-count',
 
   sendButtonSelectors: [
     'button[aria-label="Send Message"]',
@@ -53,6 +60,10 @@ createContentScript({
   sendButtonFilter: isClaudeSendControl,
 
   responseSelectors: [
+    // Current transcript engine. Select the answer body, excluding the outer
+    // assistant row's accessibility heading, actions, version and timestamp.
+    '[data-testid="assistant-message"] [data-transcript-engine-root]',
+    '[data-testid="assistant-message"] [data-perf-reply-text]',
     // Claude response containers (actual class: font-claude-response)
     '.font-claude-response',
     '[data-is-streaming] .font-claude-response',

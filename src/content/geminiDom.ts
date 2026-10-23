@@ -19,6 +19,33 @@ export const GEMINI_INPUT_SELECTORS = [
   'rich-textarea [contenteditable="true"]',
 ];
 
+
+// Confirm an actual new user turn rather than relying solely on a Stop button
+// or a newly rendered assistant container. Gemini has used several host layouts.
+export const GEMINI_USER_MESSAGE_SELECTORS = [
+  'user-query .query-text',
+  'user-query .user-query-text',
+  'user-query .query-content',
+  'user-query .markdown',
+  'user-query',
+  '[data-test-id="user-query"]',
+  // Alternative host layouts: matching a newly appended user turn is positive
+  // submission evidence, unlike a cleared composer alone.
+  '[data-testid="user-message"]',
+  '[data-message-author-role="user"]',
+  '.user-query .query-text',
+  '.user-query .query-content',
+];
+
+// Gemini's query-text also contains a screen-reader heading with "You said"
+// and a truncated duplicate of the prompt. Read the actual prompt lines so
+// that accessibility chrome cannot invalidate positive submission evidence.
+export function readGeminiUserMessageText(message: Element): string {
+  const lines = Array.from(message.querySelectorAll('.query-text-line'));
+  if (lines.length) return lines.map(line => line.textContent ?? '').join('\n');
+  return (message as HTMLElement).innerText || message.textContent || '';
+}
+
 export const GEMINI_SEND_SELECTORS = [
   'button.send-button',
   'button[aria-label="Send message"]',

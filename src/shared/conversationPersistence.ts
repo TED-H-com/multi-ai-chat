@@ -25,6 +25,33 @@ export interface ConversationPersister {
   peek(): ConversationPersistPayload | null;
 }
 
+export function prepareNewConversation(
+  conversations: Conversation[],
+  mode: ChatMode,
+  roles: ModeRoles,
+  untitled: string,
+  createId: () => string = () => crypto.randomUUID(),
+  now = Date.now(),
+): { conversation: Conversation; conversations: Conversation[] } {
+  const reusable = conversations.find(candidate => !candidate.messages?.length);
+  const conversation: Conversation = {
+    id: reusable?.id ?? createId(),
+    title: untitled,
+    mode,
+    roles: mode === 'free' ? undefined : { ...roles },
+    messages: [],
+    providerUrls: {},
+    createdAt: reusable?.createdAt ?? now,
+    updatedAt: now,
+  };
+  return {
+    conversation,
+    conversations: reusable
+      ? conversations.map(candidate => candidate.id === conversation.id ? conversation : candidate)
+      : [conversation, ...conversations].slice(0, MAX_CONVERSATIONS),
+  };
+}
+
 export function storageReadFailed(lastError: { message?: string } | undefined | null): boolean {
   return Boolean(lastError?.message);
 }

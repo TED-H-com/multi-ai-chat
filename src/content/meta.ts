@@ -12,6 +12,10 @@ import {
   isMetaStopControl,
   isMetaGenerationActive,
   metaLoginStatus,
+  metaResponseContentRoot,
+  isMetaResponseCandidate,
+  prepareMetaResponse,
+  isMetaResponseStreaming,
 } from './metaDom';
 
 const inputs = () => Array.from(document.querySelectorAll(META_INPUT_SELECTORS.join(', ')));
@@ -38,6 +42,9 @@ createContentScript({
   sendButtonSelectors: META_SEND_SELECTORS,
   sendButtonFilter: isMetaSendControl,
   responseSelectors: META_RESPONSE_SELECTORS,
+  responseContentRoot: metaResponseContentRoot,
+  responseFilter: isMetaResponseCandidate,
+  prepareResponse: prepareMetaResponse,
   responseTracking: 'semantic-latest',
   stopButtonSelectors: META_STOP_SELECTORS,
   stopButtonFilter: isMetaStopControl,
@@ -47,7 +54,9 @@ createContentScript({
   isThinking: () => isMetaGenerationActive(
     Array.from(document.querySelectorAll(META_STOP_SELECTORS.join(', '))),
     (element) => isVisibleMetaElement(element as Element),
-  ),
+  ) || isMetaResponseStreaming(Array.from(document.querySelectorAll(
+    '[data-testid="assistant-message"][data-streaming-state]',
+  )).slice(-1)[0]),
   streamWhileThinking: true,
   doneDelay: 5000,
   chunkDebounce: 600,

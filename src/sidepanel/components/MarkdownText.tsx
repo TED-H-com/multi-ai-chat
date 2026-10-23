@@ -21,7 +21,7 @@ function safeUrl(value: string): string | null {
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_([^_\n]+)_|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s<]+)/g;
+  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}_])__[^_\n]+__(?![\p{L}\p{N}_])|\*[^*\n]+\*|(?<![\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s<]+)/gu;
   let cursor = 0;
   let match: RegExpExecArray | null;
   let index = 0;

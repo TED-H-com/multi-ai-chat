@@ -3,11 +3,14 @@ import test from 'node:test';
 import { firstAcceptedCandidate } from '../src/content/elementSelection.ts';
 import {
   GEMINI_INPUT_SELECTORS,
+  GEMINI_USER_MESSAGE_SELECTORS,
   GEMINI_SEND_SELECTORS,
   isUsableGeminiComposerInput,
   isGeminiSendControl,
   isGeminiStopControl,
+  readGeminiUserMessageText,
 } from '../src/content/geminiDom.ts';
+import { contentMatchesPrompt } from '../src/content/sendConfirmation.ts';
 
 function control(options: {
   tagName?: string; visible?: boolean; qlEditor?: boolean; inComposer?: boolean;
@@ -64,4 +67,23 @@ test('Gemini controls require the actual button and a known send or composer sco
   assert.equal(isGeminiStopControl(control({ tagName: 'BUTTON', inComposer: true })), true);
   assert.equal(isGeminiStopControl(control({ tagName: 'BUTTON', ariaLabel: 'Stop' })), false);
   assert.equal(GEMINI_SEND_SELECTORS.includes('.action-wrapper button[aria-label]'), false);
+});
+
+test('Gemini submission evidence selectors include alternative user bubble markup', () => {
+  assert.ok(GEMINI_USER_MESSAGE_SELECTORS.includes('[data-testid="user-message"]'));
+  assert.ok(GEMINI_USER_MESSAGE_SELECTORS.includes('[data-message-author-role="user"]'));
+});
+
+test('Gemini confirms the full prompt despite the hidden You said preview and preserves quoted spaces', () => {
+  const prompt = 'Answer briefly.\nKeep "a  b" exactly.';
+  const bubble = {
+    innerText: `You said Answer briefly. Keep…\n${prompt}`,
+    querySelectorAll: (selector: string) => selector === '.query-text-line'
+      ? [{ textContent: ' Answer briefly. ' }, { textContent: '' }, { textContent: ' Keep "a  b" exactly. ' }]
+      : [],
+  } as unknown as Element;
+  assert.equal(contentMatchesPrompt((bubble as HTMLElement).innerText, prompt), false);
+  assert.equal(contentMatchesPrompt(readGeminiUserMessageText(bubble), prompt), true);
+  assert.equal(contentMatchesPrompt(readGeminiUserMessageText(bubble), 'Answer briefly.\nKeep "a b" exactly.'), false);
+  assert.equal(contentMatchesPrompt(readGeminiUserMessageText(bubble), 'A different prompt'), false);
 });

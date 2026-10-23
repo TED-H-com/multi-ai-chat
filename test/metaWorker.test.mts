@@ -11,6 +11,8 @@ import type { AIProvider, ConsultRoles, DebateRoles, RoundtableRoles } from '../
 import { decodeError, encodeError } from '../src/shared/errors.ts';
 import { openUnreadyProviders } from '../src/sidepanel/openUnreadyProviders.ts';
 import { META_ORIGINS } from '../src/shared/metaOrigins.ts';
+import { capturedMetaResponse } from './helpers/capturedMetaResponse.mts';
+import { getProviderFromUrl } from '../src/shared/providerUrl.ts';
 
 const META_CONTENT_SCRIPT_ID = 'meta-ai';
 
@@ -59,6 +61,7 @@ function worker(
     session?: Record<string, unknown>;
     rejectSend?: AIProvider[];
     metaHostPermitted?: boolean;
+    panelBehaviorError?: boolean;
     resumeSnapshot?: { state: string; submission: 'not_submitted' | 'uncertain' | 'submitted'; response?: string };
   } = {},
 ) {
@@ -67,6 +70,7 @@ function worker(
   const stops: any[] = [];
   const broadcasts: any[] = [];
   const navigated: number[] = [];
+  const activations: number[] = [];
   const navigations: { tabId: number; url?: string }[] = [];
   const created: { url: string }[] = [];
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -79,6 +83,9 @@ function worker(
   const sendAcknowledgement: { current?: (message: any) => Promise<unknown> | unknown } = {};
   const documentProbeHold: { current?: (tabId: number) => Promise<void> } = {};
   const scriptExecutions: any[] = [];
+  const statusProbeErrors = new Map<AIProvider, string>();
+  const deniedInjectionHosts = new Set<AIProvider>();
+  let injectionFailure: string | undefined;
   const tabs: Array<{ id: number; url: string; status?: string }> = ALL_PROVIDERS.flatMap((provider, index) => (
     missingTabs.includes(provider) ? [] : [{ id: index + 1, url: AI_PROVIDERS[provider].url }]
   ));
@@ -113,7 +120,7 @@ function worker(
     };
   }
   const chrome = {
-    sidePanel: { setPanelBehavior: async () => {} },
+    sidePanel: { setPanelBehavior: async () => { if (extras.panelBehaviorError) throw new Error('No SW'); } },
     storage: { local: storage(local), session: storage(session, sessionGetHold) },
     runtime: {
       onMessage: event(), onConnect: event(), onInstalled: event(), onStartup: event(),
@@ -127,9 +134,12 @@ function worker(
       query: async () => tabs,
       get: async (id: number) => tabs.find((tab) => tab.id === id),
       create: async (options: { url: string }) => { created.push(options); },
-      update: async (id: number, options?: { url?: string }) => {
-        navigated.push(id);
-        navigations.push({ tabId: id, url: options?.url });
+      update: async (id: number, options?: { url?: string; active?: boolean }) => {
+        if (options?.active === true && options.url === undefined) activations.push(id);
+        else {
+          navigated.push(id);
+          navigations.push({ tabId: id, url: options?.url });
+        }
         if (navigationHold.current) await navigationHold.current(id, options);
         return tabs.find((tab) => tab.id === id);
       },
@@ -139,6 +149,7 @@ function worker(
         }
         if (message.action === 'CHECK_STATUS') {
           const provider = message.provider as AIProvider;
+          if (statusProbeErrors.has(provider)) throw new Error(statusProbeErrors.get(provider));
           receive({ action: 'STATUS_REPORT', provider, payload: { loggedIn: provider in readiness ? readiness[provider] : true } }, { tab: tabs.find((tab) => tab.id === id) });
         }
         if (message.action === 'SEND_MESSAGE') {
@@ -154,7 +165,10 @@ function worker(
     },
     windows: { update: async () => {} },
     permissions: {
-      contains: async () => metaHostPermitted,
+      contains: async (request: { origins?: string[] }) => (request.origins ?? []).every(origin => {
+        const provider = getProviderFromUrl(origin.replace(/\*$/, ''));
+        return !deniedInjectionHosts.has(provider as AIProvider) && (provider !== 'meta' || metaHostPermitted);
+      }),
       onAdded: event(),
       onRemoved: event(),
     },
@@ -163,6 +177,7 @@ function worker(
         scriptExecutions.push(injection);
         const tabId = injection.target?.tabId as number | undefined;
         if (!tabId) return [];
+        if (!injection.func && injectionFailure) throw new Error(injectionFailure);
         if (injection.target?.documentIds?.some((documentId: string) => documentId !== documentIds.get(tabId))) {
           throw new Error('No matching document for this injection');
         }
@@ -273,8 +288,11 @@ function worker(
   const workerState = load(path.join(root, 'src/background/service-worker.ts')) as { pendingResponseCount: () => number };
   const ready = new Promise<void>((resolve) => setImmediate(resolve));
   return {
-    command, receive, sent, stops, broadcasts, local, session, navigated, navigations, created, ready, complete, fail, removeTab,
+    command, receive, sent, stops, broadcasts, local, session, navigated, navigations, activations, created, ready, complete, fail, removeTab,
     updateTab, replaceTab, scriptExecutions,
+    failStatusProbe(provider: AIProvider, error?: string) { if (error) statusProbeErrors.set(provider, error); else statusProbeErrors.delete(provider); },
+    denyInjectionHost(provider: AIProvider, denied: boolean) { if (denied) deniedInjectionHosts.add(provider); else deniedInjectionHosts.delete(provider); },
+    failInjection(error?: string) { injectionFailure = error; },
     dynamicScripts, contentScriptErrors, permissions: chrome.permissions, runtime: chrome.runtime,
     holdBroadcasts(handler?: (message: any) => Promise<void> | void) { broadcastHold.current = handler; },
     holdSessionGets(handler?: () => Promise<void>) { sessionGetHold.current = handler; },
@@ -318,8 +336,48 @@ test('worker default fanout excludes Meta even with all five tabs connected', as
   t.after(app.close);
   await app.ready;
   assert.equal((await app.send('free', ALL_PROVIDERS)).ok, true);
-  assert.deepEqual(app.sent.map((message) => message.provider), activeProviders('meta'));
+  assert.deepEqual(app.sent.map((message) => message.provider).sort(), activeProviders('meta').sort());
   assert.equal((await app.command({ action: 'OPEN_LOGIN', provider: 'meta' })).ok, false);
+});
+
+test('denied Claude site access prevents injection until a permission-change event', async t => {
+  const app = worker();
+  t.after(app.close); await app.ready;
+  app.failStatusProbe('claude', 'Could not establish connection. Receiving end does not exist.');
+  app.denyInjectionHost('claude', true);
+  await app.command({ action: 'GET_CONNECTIONS' }); await flushWorkerTurns();
+  assert.equal(app.scriptExecutions.filter(item => item.files).length, 0);
+  assert.equal(app.broadcasts.filter(item => item.action === 'CONNECTIONS_UPDATE').at(-1)?.payload.claude.status, 'disconnected');
+  await app.command({ action: 'GET_CONNECTIONS' }); await flushWorkerTurns();
+  assert.equal(app.scriptExecutions.filter(item => item.files).length, 0);
+  app.denyInjectionHost('claude', false); app.failStatusProbe('claude');
+  for (const listener of app.permissions.onAdded.listeners) listener({ origins: ['https://claude.ai/*'] });
+  await flushWorkerTurns();
+  assert.equal(app.broadcasts.filter(item => item.action === 'CONNECTIONS_UPDATE').at(-1)?.payload.claude.status, 'connected');
+});
+
+test('an error-page injection is attempted once and recovers after navigation without submitting a prompt', async t => {
+  const app = worker();
+  t.after(app.close); await app.ready;
+  app.failStatusProbe('grok', 'Could not establish connection. Receiving end does not exist.');
+  app.failInjection('Frame with ID 0 is showing error page');
+  await app.command({ action: 'GET_CONNECTIONS' }); await flushWorkerTurns();
+  await app.command({ action: 'GET_CONNECTIONS' }); await flushWorkerTurns();
+  assert.equal(app.scriptExecutions.filter(item => item.files).length, 1);
+  assert.equal(app.sent.length, 0);
+  app.failStatusProbe('grok'); app.failInjection();
+  app.updateTab(4, { status: 'loading' }); app.updateTab(4, { status: 'complete' });
+  await flushWorkerTurns();
+  assert.equal(app.broadcasts.filter(item => item.action === 'CONNECTIONS_UPDATE').at(-1)?.payload.grok.status, 'connected');
+});
+
+test('No SW status errors do not trigger content-script reinjection', async t => {
+  const app = worker({}, true, {}, [], { panelBehaviorError: true });
+  t.after(app.close); await app.ready;
+  app.failStatusProbe('meta', 'No SW');
+  await app.command({ action: 'GET_CONNECTIONS' }); await flushWorkerTurns();
+  assert.equal(app.scriptExecutions.filter(item => item.files).length, 0);
+  assert.equal(app.sent.length, 0);
 });
 
 test('worker swaps Meta into fanout and leaves standby tabs untouched during session restore/reset', async (t) => {
@@ -331,7 +389,7 @@ test('worker swaps Meta into fanout and leaves standby tabs untouched during ses
   assert.equal(app.local.standbyProvider, 'grok');
   assert.deepEqual(Array.from(result.freeTargets), ['chatgpt', 'claude', 'gemini', 'meta']);
   await app.send('free', ALL_PROVIDERS);
-  assert.deepEqual(app.sent.map((message) => message.provider), activeProviders('grok'));
+  assert.deepEqual(app.sent.map((message) => message.provider).sort(), activeProviders('grok').sort());
   await app.command({ action: 'RESET_PROVIDER_SESSIONS' });
   assert.deepEqual(app.navigated, [1, 2, 3, 5]);
   await app.command({ action: 'RESTORE_PROVIDER_SESSIONS', payload: {
@@ -494,6 +552,104 @@ test('a completion before a rejected send acknowledgement cannot become a Debate
   await app.command({ action: 'RESOLVE_STEP_RECOVERY', payload: { ...recovery, action: 'skip' } });
   await completeRemaining(app, running);
   assert.doesNotMatch(app.sent[1].payload.text, /normal response before rejected acknowledgement/);
+});
+
+test('Free mode retains provider confirmation diagnostics without a serial turn key', async (t) => {
+  const app = worker({}, false);
+  t.after(app.close);
+  await app.ready;
+  const running = app.send('free', ['gemini']);
+  await waitUntil(() => app.sent.length === 1, 'Gemini Free request');
+  const message = app.sent[0];
+  app.receive({ ...message, action: 'PROVIDER_REQUEST_STATE', payload: { state: 'submission_accepted', submission: 'submitted' } }, {
+    tab: { id: message.tabId, url: AI_PROVIDERS.gemini.url },
+  });
+  app.complete(message, 'Gemini answer');
+  await running;
+  const events = app.broadcasts.filter(event => event.action === 'WORKFLOW_DIAGNOSTIC' && event.provider === 'gemini');
+  assert.ok(events.some(event => event.payload.stage === 'provider_submission_accepted' && event.payload.turnId === 'free:gemini'));
+  assert.ok(events.some(event => event.payload.stage === 'response_extracted' && event.payload.responseLength === 'Gemini answer'.length));
+});
+
+for (const foregroundProvider of ['gemini', 'claude'] as const) {
+test(`${foregroundProvider} is brought to the foreground before its single provider send without navigation`, async (t) => {
+  const app = worker({}, false);
+  t.after(app.close);
+  await app.ready;
+  const running = app.send('free', [foregroundProvider]);
+  await waitUntil(() => app.sent.length === 1, `foreground ${foregroundProvider} send`);
+  assert.deepEqual(app.activations, [app.sent[0].tabId]);
+  assert.deepEqual(app.navigations, []);
+  app.complete(app.sent[0], 'Gemini foreground answer');
+  await running;
+  assert.equal(app.sent.length, 1);
+  assert.equal(app.broadcasts.filter(event => event.action === 'RESPONSE_DONE' && event.payload === 'Gemini foreground answer').length, 1);
+});
+
+test(`cancelling while ${foregroundProvider} is being activated prevents its later provider send`, async (t) => {
+  const app = worker({}, false);
+  let release: (() => void) | undefined;
+  t.after(() => { release?.(); app.close(); });
+  await app.ready;
+  let activating = false;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  app.holdNavigations(async () => { activating = true; await held; });
+  const workflowId = crypto.randomUUID();
+  const running = app.send('free', [foregroundProvider], { workflowId });
+  await waitUntil(() => activating, `${foregroundProvider} activation`);
+  await app.command({ action: 'CANCEL_WORKFLOW', payload: { workflowId, sessionId: 'session', clientId: 'client' } });
+  release?.();
+  await running;
+  assert.equal(app.sent.length, 0);
+});
+}
+
+test('a serial Grok turn is activated before its one send and completes the genuine reference chain', async (t) => {
+  const app = worker({}, false);
+  t.after(app.close);
+  await app.ready;
+  const running = app.send('consult', undefined, { roles: {
+    first: 'grok', second: 'chatgpt', reviewer: 'claude', summary: 'gemini',
+  } });
+  await waitUntil(() => app.sent.length === 1, 'foreground serial Grok send');
+  assert.equal(app.sent[0].provider, 'grok');
+  assert.deepEqual(app.activations, [app.sent[0].tabId]);
+  for (let index = 0; index < 4; index++) {
+    await waitUntil(() => app.sent.length > index, `Consult turn ${index}`);
+    app.complete(app.sent[index], `Genuine answer ${index}`);
+  }
+  await running;
+  assert.equal(app.sent.filter(message => message.provider === 'grok').length, 1);
+  assert.deepEqual(app.navigations, []);
+  assert.match(app.sent[2].payload.text, /Genuine answer 0/);
+});
+
+test('cancelling during serial Grok activation prevents the pending send', async (t) => {
+  const app = worker({}, false);
+  let release: (() => void) | undefined;
+  t.after(() => { release?.(); app.close(); });
+  await app.ready;
+  let activating = false;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  app.holdNavigations(async () => { activating = true; await held; });
+  const workflowId = crypto.randomUUID();
+  const running = app.send('consult', undefined, { workflowId, roles: {
+    first: 'grok', second: 'chatgpt', reviewer: 'claude', summary: 'gemini',
+  } });
+  await waitUntil(() => activating, 'serial Grok activation');
+  await app.command({ action: 'CANCEL_WORKFLOW', payload: { workflowId, sessionId: 'session', clientId: 'client' } });
+  release?.();
+  await running;
+  assert.equal(app.sent.length, 0);
+});
+
+test('Grok Free delivery retains its existing parallel behavior without additional activation', async (t) => {
+  const app = worker();
+  t.after(app.close);
+  await app.ready;
+  await app.send('free', ['grok']);
+  assert.equal(app.sent.length, 1);
+  assert.deepEqual(app.activations, []);
 });
 
 test('a content failure already reported by RESPONSE_DONE keeps provider-scoped recovery instead of a system error', async (t) => {
@@ -793,6 +949,167 @@ test('worker restores standby at startup and repairs default Coding roles before
   ]);
 });
 
+test('all eight Coding stages forward the complete captured Meta implementation through review, testing and acceptance', async t => {
+  const app = worker({ standbyProvider: 'claude' }, false);
+  t.after(app.close);
+  await app.ready;
+  const code = capturedMetaResponse();
+  const order = ['gemini', 'chatgpt', 'meta', 'chatgpt', 'grok', 'meta', 'gemini', 'meta'];
+  const running = app.send('coding', undefined, { roles: {
+    planner: 'gemini', reviewer: 'chatgpt', coder: 'meta', tester: 'grok',
+  }, text: 'CAPTURED_CODE_WORKFLOW' });
+  for (let index = 0; index < 8; index++) {
+    await waitUntil(() => app.sent.length === index + 1, `Coding stage ${index + 1}`);
+    const request = app.sent[index];
+    assert.equal(request.provider, order[index]);
+    if ([3, 4, 5, 6, 7].includes(index)) {
+      assert.ok(request.payload.text.includes(code), `stage ${index + 1} retains code and test newlines`);
+      assert.doesNotMatch(request.payload.text, /\[Image generated\]|Show thinking/);
+    }
+    app.complete(request, request.provider === 'meta' ? code : `Verified stage ${index + 1}`);
+  }
+  assert.equal((await running).ok, true);
+  assert.equal(new Set(app.sent.map(message => message.requestId)).size, 8);
+  assert.equal(app.broadcasts.some(message => message.action === 'STEP_RECOVERY_REQUIRED'), false);
+  assert.equal(app.pendingResponseCount(), 0);
+});
+
+test('Coding records a media-only implementation as unavailable without forwarding it or automatically resending', async t => {
+  const app = worker({ standbyProvider: 'claude' }, false);
+  t.after(app.close); await app.ready;
+  const running = app.send('coding', undefined, { roles: {
+    planner: 'gemini', reviewer: 'chatgpt', coder: 'meta', tester: 'grok',
+  }, recovery: { enabled: true, policy: 'safe' } });
+  for (let index = 0; index < 2; index++) {
+    await waitUntil(() => app.sent.length === index + 1, `Coding setup ${index}`);
+    app.complete(app.sent[index], `Specification contribution ${index}`);
+  }
+  await waitUntil(() => app.sent.length === 3, 'Coding implementation');
+  const implementation = app.sent[2];
+  app.complete(implementation, '[Image generated]');
+  await waitUntil(() => app.sent.length === 4, 'Coding review after unavailable implementation');
+  assert.match(app.sent[3].payload.text, /no response.*skipped/);
+  assert.doesNotMatch(app.sent[3].payload.text, /\[Image generated\]/);
+  const checkpoint = app.local.multiAiWorkflowCheckpoint as any;
+  assert.equal(checkpoint.contributions.find((item: any) => item.turnKey === 'coding:code-v1').status, 'unavailable');
+  assert.ok(app.broadcasts.some(item => item.action === 'RESPONSE_DONE' && item.requestId === implementation.requestId && decodeError(item.payload)?.key === 'error.no_response_text'));
+  assert.equal(app.broadcasts.some(item => item.action === 'WORKFLOW_DIAGNOSTIC' && item.requestId === implementation.requestId && item.payload.stage === 'response_extracted'), false);
+  await completeRemaining(app, running);
+  assert.equal(app.sent.length, 8);
+  assert.equal(app.sent.filter(item => item.requestId === implementation.requestId).length, 1);
+  const statuses = app.broadcasts.filter(item => item.action === 'WORKFLOW_STATUS' && item.payload.key === 'workflow.coding');
+  assert.deepEqual(statuses.map(item => item.payload.progress.completed), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.ok(statuses.every(item => item.payload.progress.total === 8));
+});
+
+test('Roundtable records non-text output as a gap and completes the remaining nineteen turns without repeating it', async t => {
+  const app = worker({ standbyProvider: 'claude' }, false);
+  t.after(app.close); await app.ready;
+  const running = app.send('roundtable', undefined, { roles: {
+    first: 'meta', second: 'gemini', third: 'grok', fourth: 'chatgpt',
+  }, recovery: { enabled: true, policy: 'safe' } });
+  await waitUntil(() => app.sent.length === 1, 'Roundtable first contribution');
+  app.complete(app.sent[0], '[Image generated: chart]');
+  await waitUntil(() => app.sent.length === 2, 'Roundtable second contribution');
+  assert.match(app.sent[1].payload.text, /no response.*skipped/);
+  assert.doesNotMatch(app.sent[1].payload.text, /\[Image generated/);
+  await completeRemaining(app, running);
+  assert.equal(app.sent.length, 20);
+  assert.equal(new Set(app.sent.map(item => item.requestId)).size, 20);
+  assert.equal(app.sent.slice(1).some(item => item.payload.text.includes('[Image generated')), false);
+});
+
+test('Coding cancellation during a held stage-status broadcast prevents the later provider send', async t => {
+  const app = worker({}, false);
+  let release: (() => void) | undefined;
+  t.after(() => { release?.(); app.close(); }); await app.ready;
+  let held = false;
+  app.holdBroadcasts(async message => {
+    if (message.action === 'WORKFLOW_STATUS' && message.payload.key === 'workflow.coding') {
+      held = true; await new Promise<void>(resolve => { release = resolve; });
+    }
+  });
+  const workflowId = crypto.randomUUID();
+  const running = app.send('coding', undefined, { workflowId });
+  await waitUntil(() => held, 'Coding stage broadcast');
+  assert.equal(app.sent.length, 0);
+  await app.command({ action: 'CANCEL_WORKFLOW', payload: { workflowId, sessionId: 'session', clientId: 'client' } });
+  release?.(); await running;
+  assert.equal(app.sent.length, 0);
+});
+
+test('Free mode retains legitimate generated-media output', async t => {
+  const app = worker({}, false);
+  t.after(app.close); await app.ready;
+  const running = app.send('free', ['grok']);
+  await waitUntil(() => app.sent.length === 1, 'Free media request');
+  app.complete(app.sent[0], '[Image generated: a bird]');
+  await running;
+  assert.ok(app.broadcasts.some(item => item.action === 'RESPONSE_DONE' && item.payload === '[Image generated: a bird]'));
+});
+
+for (const mode of ['coding', 'roundtable'] as const) {
+  test(`Strict ${mode} pauses on non-text output and cannot silently repeat an accepted submission`, async t => {
+    const app = worker({}, false);
+    t.after(app.close); await app.ready;
+    const running = app.send(mode, undefined, { recovery: { enabled: true, policy: 'strict' } });
+    await waitUntil(() => app.sent.length === 1, `${mode} first turn`);
+    app.complete(app.sent[0], '[Image generated]');
+    await waitUntil(() => app.broadcasts.some(item => item.action === 'STEP_RECOVERY_REQUIRED'), `${mode} missing-text recovery`);
+    const recovery = app.broadcasts.find(item => item.action === 'STEP_RECOVERY_REQUIRED')!.payload;
+    assert.equal(recovery.retryAllowed, false);
+    assert.equal(recovery.failureKind, 'response_extraction');
+    assert.equal(app.sent.length, 1);
+    await app.command({ action: 'RESOLVE_STEP_RECOVERY', payload: { ...recovery, action: 'cancel' } });
+    await running;
+    assert.equal(app.sent.length, 1);
+  });
+}
+
+test('accepted Coding submission evidence survives a later failure state and waiter cleanup without automatic resend', async t => {
+  const app = worker({}, false);
+  t.after(app.close); await app.ready;
+  const running = app.send('coding', undefined, { recovery: { enabled: true, policy: 'safe' } });
+  await waitUntil(() => app.sent.length === 1, 'Coding accepted first stage');
+  const request = app.sent[0];
+  const sender = { tab: { id: request.tabId, url: AI_PROVIDERS[request.provider as AIProvider].url } };
+  for (const [state, submission] of [['submission_accepted', 'submitted'], ['recoverable_failure', 'not_submitted']]) {
+    app.receive({ action: 'PROVIDER_REQUEST_STATE', provider: request.provider, requestId: request.requestId,
+      workflowId: request.workflowId, payload: { state, submission } }, sender);
+  }
+  app.fail(request, '[Error: i18n:{"key":"error.input_injection_failed","params":{"provider":"gemini","detail":"late failure"}}]');
+  await waitUntil(() => app.sent.length === 2, 'Coding moves to reviewer rather than resending planner');
+  assert.equal(app.sent[1].provider, 'chatgpt');
+  const checkpoint = app.local.multiAiWorkflowCheckpoint as any;
+  assert.equal(checkpoint.failures[0].submission, 'submitted');
+  assert.ok(app.broadcasts.some(item => item.action === 'WORKFLOW_DIAGNOSTIC' && item.payload.stage === 'provider_recoverable_failure' && item.payload.submission === 'submitted'));
+  await completeRemaining(app, running);
+  assert.equal(app.sent.length, 8);
+});
+
+test('five Roundtable rounds preserve captured Meta content and all earlier contributions with no skipped turns', async t => {
+  const app = worker({ standbyProvider: 'claude' }, false);
+  t.after(app.close);
+  await app.ready;
+  const code = capturedMetaResponse();
+  const roles: RoundtableRoles = { first: 'meta', second: 'gemini', third: 'grok', fourth: 'chatgpt' };
+  const running = app.send('roundtable', undefined, { roles, text: 'CAPTURED_ROUNDTABLE' });
+  const replies: string[] = [];
+  for (let index = 0; index < 20; index++) {
+    await waitUntil(() => app.sent.length === index + 1, `Roundtable stage ${index + 1}`);
+    const request = app.sent[index];
+    assert.equal(request.provider, Object.values(roles)[index % 4]);
+    for (const reply of replies) assert.ok(request.payload.text.includes(reply));
+    const reply = `Unique contribution ${index + 1}\n${request.provider === 'meta' ? code : 'Reviewed prior contributions.'}`;
+    replies.push(reply);
+    app.complete(request, reply);
+  }
+  assert.equal((await running).ok, true);
+  assert.equal(new Set(app.sent.map(message => message.requestId)).size, 20);
+  assert.equal(app.broadcasts.some(message => message.action === 'STEP_RECOVERY_REQUIRED'), false);
+  assert.equal(app.pendingResponseCount(), 0);
+});
+
 test('provider selection rejects content-script requests and changes during an active workflow', async (t) => {
   const app = worker({}, false);
   t.after(app.close);
@@ -863,7 +1180,8 @@ test('shortcut uses OPEN_LOGIN to focus existing unready tabs without opening st
     assert.equal((await app.command({ action: 'OPEN_LOGIN', provider })).ok, true);
   });
   assert.deepEqual(failed, []);
-  assert.deepEqual(app.navigated, [1, 2, 3]);
+  assert.deepEqual(app.activations, [1, 2, 3]);
+  assert.deepEqual(app.navigations, []);
   assert.deepEqual(app.created, []);
   assert.equal(app.sent.length, 0);
 });
@@ -1657,6 +1975,66 @@ test('a replacement worker resumes a Roundtable checkpoint from an owned complet
     return second.broadcasts.some((message) => message.payload?.done === true && message.payload?.cancelled === false);
   }, 'resumed Roundtable completion', 8_000);
   assert.equal(second.sent.length, 19);
+});
+
+for (const mode of ['coding', 'roundtable'] as const) {
+  for (const response of ['', '[Image generated]']) {
+    test(`restarted ${mode} rejects completed ${response ? 'media-only' : 'empty'} replies without replaying the original turn`, async t => {
+      const first = worker({}, false);
+      t.after(first.close); await first.ready;
+      void first.send(mode, undefined, { recovery: { enabled: true, policy: 'safe' } }).catch(() => {});
+      await waitUntil(() => first.sent.length === 1, 'request before restart');
+      const second = worker(structuredClone(first.local), false, {}, [], {
+        session: { ...first.session },
+        resumeSnapshot: { state: 'response_complete', submission: 'submitted', response },
+      });
+      t.after(second.close); await second.ready;
+      await second.command({ action: 'GET_CONNECTIONS', payload: { clientId: 'resumed-panel', sessionId: 'session' } });
+      await waitUntil(() => second.sent.length === 1, 'next logical turn after unavailable reply');
+      assert.equal(second.sent[0].provider, mode === 'coding' ? 'chatgpt' : 'gemini');
+      assert.match(second.sent[0].payload.text, /no response.*skipped/);
+      assert.doesNotMatch(second.sent[0].payload.text, /\[Image generated\]/);
+      const completed = new Set<string>();
+      await waitUntil(() => {
+        for (const request of second.sent) {
+          if (completed.has(request.requestId)) continue;
+          completed.add(request.requestId); second.complete(request);
+        }
+        return second.broadcasts.some(item => item.payload?.done === true);
+      }, 'resumed workflow completes', 8000);
+      assert.equal(second.sent.length, (mode === 'coding' ? 8 : 20) - 1);
+    });
+  }
+}
+
+test('legacy media-only Roundtable checkpoint contributions become explicit gaps without resending completed turns', async t => {
+  const first = worker({ standbyProvider: 'grok' }, false);
+  t.after(first.close); await first.ready;
+  void first.send('roundtable', undefined, { roles: META_ROUNDTABLE, recovery: { enabled: true, policy: 'safe' } }).catch(() => {});
+  await waitUntil(() => first.sent.length === 1, 'legacy first turn');
+  first.complete(first.sent[0], 'Legacy opening');
+  await waitUntil(() => first.sent.length === 2, 'legacy second turn');
+  const stored = structuredClone(first.local) as Record<string, any>;
+  stored.multiAiWorkflowCheckpoint.contributions[0].text = '[Image generated]';
+  const second = worker(stored, false, {}, [], {
+    session: { ...first.session },
+    resumeSnapshot: { state: 'response_complete', submission: 'submitted', response: 'Restored second contribution' },
+  });
+  t.after(second.close); await second.ready;
+  await second.command({ action: 'GET_CONNECTIONS', payload: { clientId: 'resumed-panel', sessionId: 'session' } });
+  await waitUntil(() => second.sent.length === 1, 'legacy third turn');
+  assert.match(second.sent[0].payload.text, /no response.*skipped/);
+  assert.match(second.sent[0].payload.text, /Restored second contribution/);
+  assert.doesNotMatch(second.sent[0].payload.text, /\[Image generated\]/);
+  const completed = new Set<string>();
+  await waitUntil(() => {
+    for (const request of second.sent) {
+      if (completed.has(request.requestId)) continue;
+      completed.add(request.requestId); second.complete(request);
+    }
+    return second.broadcasts.some(item => item.payload?.done === true);
+  }, 'legacy resumed completion', 8000);
+  assert.equal(second.sent.length, 18);
 });
 
 test('a restart never replays a checkpoint whose accepted-send evidence outlives the content script', async (t) => {

@@ -24,6 +24,7 @@ import {
 import {
   captureSemanticResponseBaseline,
   currentSemanticResponseText,
+  distinctSemanticResponseTurns,
   isActiveResponseGeneration,
   responsesFollowingAnchor,
   type SemanticResponseBaseline,
@@ -38,16 +39,21 @@ export interface ContentScriptConfig {
   sendButtonFilter?: (element: Element) => boolean;
   userMessageSelectors?: string[];
   userMessageTracking?: 'element-identity' | 'semantic-count';
+  userMessageText?: (element: Element) => string;
   sendConfirmation?: 'heuristic' | 'matching-user-message' | 'single-activation';
   readInputText?: (element: Element) => string;
   inputMatchesPrompt?: (element: Element, text: string) => boolean;
   preserveExistingDraft?: boolean;
   requireSameComposerForClearConfirmation?: boolean;
   responseSelectors: string[];
+  responseFilter?: (element: Element) => boolean;
   responseTracking?: 'element-identity' | 'semantic-latest';
   requireMatchingUserMessageForGenerationSignals?: boolean;
   anchorSemanticResponsesAfterMatchingUserMessage?: boolean;
   responseContentRoot?: ResponseContentRoot;
+  // Some providers mount only a preview of folded code. Return false until
+  // response-local display controls have revealed the complete answer.
+  prepareResponse?: (response: Element) => boolean;
   stopButtonSelectors?: string[];
   stopButtonFilter?: (element: Element) => boolean;
   loginDetector: () => boolean | null;
@@ -63,6 +69,11 @@ export interface ContentScriptConfig {
   // click immediately after controlled-editor readback instead of waiting for
   // the generic cosmetic pre-send delay.
   immediateSendAfterInsertion?: boolean;
+  // Longer background-tab acknowledgement window; does not repeat a click.
+  sendConfirmationTimeoutMs?: number;
+  // Release the delivery reply port after synchronous request reservation.
+  // Slow background editor work reports its outcome through scoped events.
+  acknowledgeOnRequestStart?: boolean;
   doneDelay?: number;
   chunkDebounce?: number;
 }
@@ -170,6 +181,7 @@ export function createContentScript(config: ContentScriptConfig): void {
   let responseGeneration = 0;
   let failedRequestTombstone: SettledRequestIdentity | undefined;
   let sendDispatched = false;
+  let submissionAccepted = false;
   let thinkingAtRequestStart = false;
   let cancelledRequestCleanup: CancelledRequestCleanup | undefined;
   let recentCompletedRequest: CompletedContentRequest | undefined;
@@ -219,6 +231,7 @@ export function createContentScript(config: ContentScriptConfig): void {
     submission: SubmissionEvidence,
     diagnostics?: ProviderRequestDiagnostics,
   ): void {
+    if (submission === 'submitted' && sendDispatched) submissionAccepted = true;
     if (!activeRequestId || !activeWorkflowId || (lastReportedRequestState === state && !diagnostics)) return;
     lastReportedRequestState = state;
     safeSendMessage({
@@ -316,6 +329,7 @@ export function createContentScript(config: ContentScriptConfig): void {
     // tombstone before starting Retry, and no older cleanup may target this newer request.
     failedRequestTombstone = undefined;
     sendDispatched = false;
+    submissionAccepted = false;
     lastResponseText = '';
     sawGenerationActivity = false;
     responseWaitStartedAt = Date.now();
@@ -357,7 +371,18 @@ export function createContentScript(config: ContentScriptConfig): void {
       assertInputLanded(input, text);
       reportRequestState('prompt_inserted', 'not_submitted');
     } catch (error) {
-      finishWithError(encodeError('error.input_injection_failed', { provider, detail: errorMessage(error) }), requestId, workflowId, generation);
+      // A native rich-text edit can partially land even when the exact readback
+      // fails (notably ProseMirror). Retrying that request into the nonempty
+      // editor would collide with its draft. Classify it as an existing draft
+      // from the first attempt, rather than triggering another automatic edit.
+      const hasUnverifiedDraft = (preserveExistingDraft || sendConfirmation === 'matching-user-message')
+        && readInputText(input).trim() !== '' && !inputTextMatches(input, text);
+      if (hasUnverifiedDraft) {
+        reportRequestState('existing_draft', 'not_submitted');
+        finishWithError(encodeError('error.existing_draft', { provider }), requestId, workflowId, generation);
+      } else {
+        finishWithError(encodeError('error.input_injection_failed', { provider, detail: errorMessage(error) }), requestId, workflowId, generation);
+      }
       throw error;
     }
 
@@ -376,7 +401,7 @@ export function createContentScript(config: ContentScriptConfig): void {
         scheduleForRequest(() => {
           if (sendStarted()) return;
           finishWithError(encodeError('error.send_unconfirmed', { provider }), requestId, workflowId, generation);
-        }, STRICT_SEND_CONFIRMATION_TIMEOUT_MS, requestId, generation);
+        }, config.sendConfirmationTimeoutMs ?? STRICT_SEND_CONFIRMATION_TIMEOUT_MS, requestId, generation);
         return;
       }
       scheduleForRequest(
@@ -539,10 +564,13 @@ export function createContentScript(config: ContentScriptConfig): void {
 
   function queryUserMessages(): Element[] {
     const selectors = config.userMessageSelectors ?? [];
-    return selectors.length ? Array.from(document.querySelectorAll(selectors.join(', '))) : [];
+    return selectors.length
+      ? distinctSemanticResponseTurns(Array.from(document.querySelectorAll(selectors.join(', '))))
+      : [];
   }
 
   function userMessageText(element: Element): string {
+    if (config.userMessageText) return config.userMessageText(element);
     return (element as HTMLElement).innerText || element.textContent || '';
   }
 
@@ -577,6 +605,7 @@ export function createContentScript(config: ContentScriptConfig): void {
 
   function sendStarted(): boolean {
     if (!waitingForResponse) return true;
+    if (submissionAccepted) return true;
     if (sendConfirmation === 'matching-user-message') {
       const accepted = hasNewMatchingUserMessage();
       if (accepted) {
@@ -664,21 +693,19 @@ export function createContentScript(config: ContentScriptConfig): void {
   }
 
   function queryResponses(): Element[] {
-    return Array.from(document.querySelectorAll(responseSelectors.join(', ')));
+    const candidates = Array.from(document.querySelectorAll(responseSelectors.join(', ')));
+    return config.responseFilter ? candidates.filter(config.responseFilter) : candidates;
   }
 
   function querySemanticResponses(): Element[] {
-    // In semantic mode selectors are ordered primary-first. Taking the first selector with
-    // matches avoids counting both an assistant wrapper and its nested markdown as two turns.
-    for (const selector of responseSelectors) {
-      const responses = Array.from(document.querySelectorAll(selector));
-      if (!responses.length) continue;
-      if (!anchorSemanticResponsesAfterMatchingUserMessage) return responses;
-      if (!matchingUserMessageElement) return [];
-      const anchoredResponses = responsesFollowingAnchor<Element>(responses, matchingUserMessageElement);
-      if (anchoredResponses.length) return anchoredResponses;
-    }
-    return [];
+    // A legacy selector can match historical replies while the current reply
+    // uses newer markup. Do not let earlier matches hide a later fallback.
+    const candidates = distinctSemanticResponseTurns(
+      queryResponses(),
+    );
+    if (!anchorSemanticResponsesAfterMatchingUserMessage) return candidates;
+    if (!matchingUserMessageElement) return [];
+    return responsesFollowingAnchor<Element>(candidates, matchingUserMessageElement);
   }
 
   function captureFailureDiagnostics(reason: string): ProviderRequestDiagnostics {
@@ -698,6 +725,7 @@ export function createContentScript(config: ContentScriptConfig): void {
   }
 
   function extractResponseText(response: Element): string | null {
+    if (config.prepareResponse && !config.prepareResponse(response)) return null;
     return extractResponseContent(response, responseContentRoot);
   }
 
@@ -706,6 +734,7 @@ export function createContentScript(config: ContentScriptConfig): void {
       // Claude/SPA composers mount several seconds after load; re-report the moment
       // login state flips so the card reaches "ready" without waiting for the 10s poll.
       reportStatus();
+      if (waitingForResponse && sendDispatched) sendStarted();
       if (!waitingForResponse || (isCurrentTurnThinking() && !streamWhileThinking)) return;
       updateResponse();
     });
@@ -742,6 +771,7 @@ export function createContentScript(config: ContentScriptConfig): void {
         if (pollInterval === timer) pollInterval = undefined;
         return;
       }
+      if (sendDispatched) sendStarted();
       const thinking = isCurrentTurnThinking();
       if (thinking) {
         sawGenerationActivity = true;
@@ -799,7 +829,22 @@ export function createContentScript(config: ContentScriptConfig): void {
       return;
     }
     // Must re-read before resetResponseState(): the baseline filter keys off waitingForResponse.
-    const text = longerResponseText(lastResponseText, getLatestResponseText());
+    const freshText = getLatestResponseText();
+    if (config.prepareResponse && !freshText) {
+      // A folded/remounted answer is not ready simply because an earlier
+      // introductory chunk was cached. Wait for a complete fresh extraction.
+      if (Date.now() - responseWaitStartedAt >= NO_RESPONSE_GRACE_MS) {
+        finishWithError(encodeError('error.no_response_text', { provider }));
+      } else {
+        scheduleResponseTimeout(checkIfDone, doneDelay, generation);
+      }
+      return;
+    }
+    // A provider preparation hook declares the fresh answer complete. Cleanup
+    // can remove status labels or hidden previews, making that answer shorter
+    // than an earlier cached rendering without losing substantive content.
+    const text = config.prepareResponse && freshText
+      ? freshText : longerResponseText(lastResponseText, freshText);
     const requestId = activeRequestId;
     const workflowId = activeWorkflowId;
     if (requestId && workflowId) {
@@ -921,6 +966,7 @@ export function createContentScript(config: ContentScriptConfig): void {
     lastActivatedInput = undefined;
     sawGenerationActivity = false;
     sendDispatched = false;
+    submissionAccepted = false;
     lastReportedRequestState = undefined;
   }
 
@@ -978,8 +1024,15 @@ export function createContentScript(config: ContentScriptConfig): void {
   const runtimeListener = (message: ExtensionMessage, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
     if (message.action === 'SEND_MESSAGE' && message.provider === provider) {
       const { text = '' } = (message.payload as { text?: string } | undefined) ?? {};
-      void sendMessage(text, message.requestId, message.workflowId)
-        .then(() => sendResponse({ ok: true }))
+      const previousGeneration = responseGeneration;
+      const sending = sendMessage(text, message.requestId, message.workflowId);
+      const acknowledgedEarly = Boolean(config.acknowledgeOnRequestStart
+        && responseGeneration !== previousGeneration
+        && isActiveRequest(message.requestId, responseGeneration)
+        && activeWorkflowId === message.workflowId);
+      if (acknowledgedEarly) sendResponse({ ok: true });
+      void sending
+        .then(() => { if (!acknowledgedEarly) sendResponse({ ok: true }); })
         .catch((error) => {
           // finishWithError has already emitted a scoped RESPONSE_DONE. Keep
           // that completion authoritative: rejecting the command first makes
@@ -989,9 +1042,9 @@ export function createContentScript(config: ContentScriptConfig): void {
           const failureAlreadyReported = Boolean(settledFailure
             && settledFailure.requestId === message.requestId
             && settledFailure.workflowId === message.workflowId);
-          sendResponse({ ok: false, error: errorMessage(error), ...(failureAlreadyReported ? { failureAlreadyReported: true } : {}) });
+          if (!acknowledgedEarly) sendResponse({ ok: false, error: errorMessage(error), ...(failureAlreadyReported ? { failureAlreadyReported: true } : {}) });
         });
-      return true;
+      return !acknowledgedEarly;
     }
     if (message.action === 'CHECK_STATUS') {
       // A service worker can restart while this content script survives. Always answer its

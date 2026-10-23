@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_CONSULT_ROLES, DEFAULT_DEBATE_ROLES } from '../src/shared/constants.ts';
+import { DEFAULT_CONSULT_ROLES, DEFAULT_DEBATE_ROLES, DEFAULT_CODING_ROLES, DEFAULT_ROUNDTABLE_ROLES } from '../src/shared/constants.ts';
 import {
   commitActiveConversation,
   createConversationPersister,
@@ -8,6 +8,7 @@ import {
   storageReadFailed,
   toPersistPayload,
   usableConversations,
+  prepareNewConversation,
 } from '../src/shared/conversationPersistence.ts';
 import type { ChatMessage, Conversation } from '../src/shared/types.ts';
 
@@ -27,6 +28,40 @@ function conv(id: string, extra: Partial<Conversation> = {}): Conversation {
 function msg(id: string, role: ChatMessage['role'], content: string, rest: Partial<ChatMessage> = {}): ChatMessage {
   return { id, role, content, timestamp: 1, ...rest };
 }
+
+for (const [mode, roles] of [['coding', DEFAULT_CODING_ROLES], ['roundtable', DEFAULT_ROUNDTABLE_ROLES]] as const) {
+  test(`New chat preserves selected ${mode} mode and role assignments without old provider context`, () => {
+    const history = conv('previous', { messages: [msg('question', 'user', 'Keep my old conversation')], providerUrls: { grok: 'https://grok.com/chat/previous' } });
+    const selectedRoles = { ...roles };
+    const result = prepareNewConversation([history], mode, selectedRoles, 'Untitled', () => 'next', 200);
+    assert.equal(result.conversation.mode, mode);
+    assert.deepEqual(result.conversation.roles, selectedRoles);
+    assert.notEqual(result.conversation.roles, selectedRoles);
+    assert.deepEqual(result.conversation.messages, []);
+    assert.deepEqual(result.conversation.providerUrls, {});
+    assert.equal(result.conversations[1], history);
+    const payload = payloadFromInputs({ conversations: result.conversations, activeConversationId: 'next', messages: [], mode, roles: selectedRoles, providerUrls: {} }, 'Untitled', 201);
+    assert.equal(payload?.conversations[0].mode, mode);
+    assert.deepEqual(payload?.conversations[0].roles, selectedRoles);
+  });
+}
+
+test('reusing an empty Free chat cannot reset the selected Coding mode', () => {
+  const empty = conv('reuse', { mode: 'free', providerUrls: { chatgpt: 'https://chatgpt.com/old' } });
+  const result = prepareNewConversation([empty], 'coding', DEFAULT_CODING_ROLES, 'New', () => { throw new Error('must reuse'); }, 300);
+  assert.equal(result.conversation.id, 'reuse');
+  assert.equal(result.conversation.mode, 'coding');
+  assert.equal(result.conversations.length, 1);
+  assert.deepEqual(result.conversations[0].providerUrls, {});
+  assert.equal(empty.mode, 'free');
+});
+
+test('reusing an empty chat leaves every existing saved conversation intact', () => {
+  const history = Array.from({ length: 35 }, (_, index) => conv(`saved-${index}`, { messages: [msg(`m-${index}`, 'user', `Saved question ${index}`)] }));
+  const result = prepareNewConversation([...history, conv('empty')], 'roundtable', DEFAULT_ROUNDTABLE_ROLES, 'New');
+  assert.equal(result.conversations.length, 36);
+  for (const original of history) assert.equal(result.conversations.find(item => item.id === original.id), original);
+});
 
 test('pending autosave writes the latest snapshot so a deleted conversation stays deleted', () => {
   const writes: string[][] = [];

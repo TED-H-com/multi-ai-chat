@@ -21,7 +21,34 @@ export function captureSemanticResponseBaseline<T>(
   };
 }
 
+/**
+ * Multiple provider DOM generations may be mounted in the same conversation:
+ * older replies match a legacy selector, while the newest reply uses a newer
+ * selector. Selecting only the first selector with any match hides the new
+ * reply forever. Merge in document order and retain the outermost matching
+ * message for each ancestor chain so wrappers and nested markdown are not
+ * miscounted as separate assistant turns.
+ *
+ * Callers must supply candidates in DOM order (querySelectorAll with the
+ * comma-separated selector list provides that order).
+ */
+export function distinctSemanticResponseTurns<T extends { contains?(other: T): boolean }>(
+  candidates: readonly T[],
+): T[] {
+  const distinct: T[] = [];
+  for (const candidate of candidates) {
+    // querySelectorAll yields DOM order, so every nested matching child follows
+    // its outer assistant-turn ancestor. Checking only the last accepted root
+    // avoids quadratic work on long conversations and streaming updates.
+    const previous = distinct[distinct.length - 1];
+    if (previous && typeof previous.contains === 'function' && previous.contains(candidate)) continue;
+    distinct.push(candidate);
+  }
+  return distinct;
+}
+
 const DOCUMENT_POSITION_FOLLOWING = 4;
+const DOCUMENT_POSITION_CONTAINED_BY = 16;
 
 export function responsesFollowingAnchor<T>(
   responses: readonly T[],
@@ -29,7 +56,10 @@ export function responsesFollowingAnchor<T>(
 ): T[] {
   return responses.filter((response) => {
     const position = anchor.compareDocumentPosition(response);
-    return !(position & 1) && Boolean(position & DOCUMENT_POSITION_FOLLOWING);
+    // Descendants of the user anchor also have FOLLOWING set. They must never
+    // become answer candidates merely because they render the submitted prompt.
+    return !(position & (1 | DOCUMENT_POSITION_CONTAINED_BY))
+      && Boolean(position & DOCUMENT_POSITION_FOLLOWING);
   });
 }
 

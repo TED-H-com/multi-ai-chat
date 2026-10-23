@@ -5,7 +5,10 @@ import {
   CHATGPT_LOGGED_OUT_SELECTORS,
   CHATGPT_STOP_SELECTORS,
   CHATGPT_USER_MESSAGE_SELECTORS,
+  CHATGPT_RESPONSE_SELECTORS,
   isChatGptSendControl,
+  isChatGptAssistantResponseTurn,
+  chatGptResponseContentRoot,
   isChatGptStopControl,
   isIncompleteChatGptAssistantTurn,
   isUsableChatGptComposerInput,
@@ -57,10 +60,10 @@ createContentScript({
 
   // Response container — ChatGPT uses multiple assistant messages
   // (thinking messages + final response all share the same structure)
-  responseSelectors: [
-    '[data-message-author-role="assistant"] .markdown',
-    '[data-message-author-role="assistant"]',
-  ],
+  responseSelectors: CHATGPT_RESPONSE_SELECTORS,
+  responseFilter: (candidate) => !candidate.matches('[data-testid^="conversation-turn-"]')
+    || isChatGptAssistantResponseTurn(candidate),
+  responseContentRoot: chatGptResponseContentRoot,
   // ChatGPT can remount the latest assistant turn while it transitions from
   // streaming to complete. Compare semantic turn growth/text rather than DOM
   // element identity so a visible remounted response is still collected.

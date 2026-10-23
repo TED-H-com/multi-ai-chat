@@ -90,9 +90,50 @@ export function updateGrokTextControl(
   dispatchInput(text);
 }
 
+/**
+ * Read the same visual/editor content used for send verification. ProseMirror
+ * renders paragraphs as DOM blocks: textContent concatenates them while
+ * innerText adds layout line breaks. Both are legitimate representations of
+ * the exact typed prompt, so compare their formatting without discarding
+ * significant spaces inside quoted text.
+ */
+export function readGrokComposerText(input: Element): string {
+  if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') return (input as HTMLTextAreaElement).value;
+  const editor = input as HTMLElement;
+  return editor.innerText || editor.textContent || '';
+}
+
+export function grokComposerMatches(input: Element, expected: string): boolean {
+  const normalizeEndings = (value: string) => value.replace(/\r\n?/g, '\n');
+  const visual = normalizeEndings(readGrokComposerText(input));
+  const raw = normalizeEndings(input.textContent ?? '');
+  return normalizedComposerText(visual) === normalizedComposerText(expected)
+    || normalizedComposerText(raw) === normalizedComposerText(expected);
+}
+
+// Layout whitespace can differ between a ProseMirror editor's innerText and
+// textContent. Preserve literal whitespace inside quoted strings, and never
+// remove content characters or ignore differences between words.
+function normalizedComposerText(value: string): string {
+  const literals = /"(?:\\.|[^"\\])*"|(?<![\p{L}\p{N}_])'(?:\\.|[^'\\])*'(?![\p{L}\p{N}_])/gu;
+  let result = '';
+  let end = 0;
+  for (const match of value.matchAll(literals)) {
+    result += value.slice(end, match.index).replace(/\s+/g, ' ') + match[0];
+    end = match.index + match[0].length;
+  }
+  return (result + value.slice(end).replace(/\s+/g, ' ')).trim();
+}
+
 export function grokResponseContentRoot(response: Element): Element {
   if (response.matches?.('.response-content-markdown')) return response;
   return response.querySelector?.('.response-content-markdown') ?? response;
+}
+
+export function isGrokAssistantResponseCandidate(response: Element): boolean {
+  // Both user and assistant bubbles use response-content-markdown. A fallback
+  // match inside the newly accepted user bubble is still the prompt, not a reply.
+  return !response.closest('[data-testid="user-message"], [data-message-author-role="user"], .message-bubble.user');
 }
 
 export function grokSessionReady(

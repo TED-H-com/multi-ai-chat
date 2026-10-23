@@ -67,6 +67,7 @@ import {
   WorkflowLifecycleRegistry,
 } from '../shared/workflowScope';
 import { assertContentScriptAccepted } from './messageDelivery';
+import { isMissingWorkflowText } from './textWorkflowResponse';
 import { classifyProviderFailure } from './recoveryFailure';
 import {
   ProviderRequestError,
@@ -140,6 +141,9 @@ const connections: Record<AIProvider, AIConnection> = Object.fromEntries(
 let connectionsRevision = 0;
 let lastBroadcastConnectionsRevision = -1;
 const statusProbeRetries = new Map<AIProvider, { tabId: number; timer: ReturnType<typeof setTimeout> }>();
+// A failed browser error document or denied host cannot be repaired by injecting
+// the same script repeatedly. A navigation or permission change clears this.
+const blockedContentTabs = new Map<number, Error>();
 
 const responseWaiters = new Map<string, ResponseWaiter>();
 let activeCheckpoint: WorkflowCheckpoint | undefined;
@@ -168,7 +172,9 @@ const providerSelectionReady = chrome.storage.local.get('standbyProvider').then(
 // host access. Startup, install, and wake can overlap, so one reconcile runs at a time.
 let metaHostAccessChain: Promise<void> = Promise.resolve();
 
-void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
+  console.warn('Side panel setup could not complete', error);
+});
 void chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
 void refreshConnections();
 
@@ -186,6 +192,8 @@ chrome.runtime.onStartup.addListener(() => {
   trackMetaHostAccess();
 });
 chrome.permissions.onAdded.addListener(() => {
+  blockedContentTabs.clear();
+  void refreshConnections();
   trackMetaHostAccess();
 });
 chrome.permissions.onRemoved.addListener(() => {
@@ -194,6 +202,7 @@ chrome.permissions.onRemoved.addListener(() => {
 trackMetaHostAccess();
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading' || changeInfo.url !== undefined) blockedContentTabs.delete(tabId);
   // onUpdated 也會因為標題、favicon 等變化觸發，此時 changeInfo 沒有 status 或 url。
   // 那類事件不該影響連線或分頁 ownership。
   const availabilityChanged = changeInfo.discarded !== undefined || changeInfo.frozen !== undefined;
@@ -265,6 +274,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  blockedContentTabs.delete(tabId);
   let releasedOwner = false;
   for (const provider of PROVIDERS) {
     if (connections[provider].tabId === tabId) {
@@ -279,6 +289,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onReplaced?.addListener((_addedTabId, removedTabId) => {
+  blockedContentTabs.delete(removedTabId);
   let releasedOwner = false;
   for (const provider of PROVIDERS) {
     if (connections[provider].tabId !== removedTabId) continue;
@@ -438,7 +449,15 @@ async function refreshConnections(): Promise<void> {
   const connectionsAtStart = Object.fromEntries(
     PROVIDERS.map((provider) => [provider, connections[provider]]),
   ) as Record<AIProvider, AIConnection>;
-  const tabs = await chrome.tabs.query({});
+  let tabs: chrome.tabs.Tab[];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    // Chrome can reject API calls while a worker is being replaced. The next
+    // panel/status event performs another refresh; never leave a rejected
+    // fire-and-forget refresh as an unhandled promise.
+    return;
+  }
   const candidates = Object.fromEntries(
     PROVIDERS.map((provider) => [provider, [] as chrome.tabs.Tab[]]),
   ) as Record<AIProvider, chrome.tabs.Tab[]>;
@@ -496,7 +515,7 @@ async function requestTabStatus(
       connectionAtStart,
       provider,
       tabId,
-      options.preserveConnectedOnFailure,
+      options.preserveConnectedOnFailure && !blockedContentTabs.has(tabId),
     );
     updateConnection(provider, next);
     broadcastConnections();
@@ -559,6 +578,8 @@ async function deliverToTab(
   message: ExtensionMessage,
   options: DeliveryOptions = {},
 ): Promise<unknown> {
+  const blocked = blockedContentTabs.get(tabId);
+  if (blocked) throw blocked;
   const send = async (): Promise<unknown> => {
     assertDeliveryActive(options.isActive);
     return options.documentId
@@ -575,7 +596,22 @@ async function deliverToTab(
       // receiver proves it is safe to inject and repeat the send automatically.
       throw new Error(encodeError('error.send_unconfirmed', { provider }));
     }
+    // Port closure, worker startup failures and navigation errors do not prove
+    // a missing script. Only an explicitly absent receiver permits repair.
+    if (!/Could not establish connection\. Receiving end does not exist\.?$/i.test(errorMessage(firstError))) throw firstError;
     try {
+      assertDeliveryActive(options.isActive);
+      const tab = await chrome.tabs.get(tabId);
+      if (!tab?.url || getProviderFromUrl(tab.url) !== provider || isProviderTabUnavailable(tab) || tab.status === 'loading') {
+        throw new Error(encodeError('error.reloaded', { provider }));
+      }
+      const origin = `${new URL(tab.url).origin}/*`;
+      if (!await chrome.permissions.contains({ origins: [origin] })) {
+        const denied = new Error(`Site access is not granted for ${provider}`);
+        blockedContentTabs.set(tabId, denied);
+        throw denied;
+      }
+      assertDeliveryActive(options.isActive);
       const target = options.documentId
         ? { tabId, documentIds: [options.documentId] }
         : { tabId };
@@ -592,11 +628,17 @@ async function deliverToTab(
       }
     } catch (injectError) {
       if (injectError instanceof DOMException && injectError.name === 'AbortError') throw injectError;
+      if (/Cannot access contents|must request permission|showing error page|Site access is not granted/i.test(errorMessage(injectError))) {
+        const unavailable = injectError instanceof Error ? injectError : new Error(errorMessage(injectError));
+        blockedContentTabs.set(tabId, unavailable);
+        console.info('Provider page unavailable for content scripts', { provider, tabId, reason: unavailable.message });
+        throw unavailable;
+      }
       // Last resort failed: the tab cannot run our content script at all. Surface it —
       // the browser's message (e.g. "Blocked") is the only clue to why the provider
       // never reports its status.
       console.error(`Failed to inject the ${provider} content script into tab ${tabId}`, injectError);
-      throw firstError;
+      throw injectError;
     }
     try {
       return await send();
@@ -721,6 +763,17 @@ async function sendToProvider(provider: AIProvider, text: string, requestId: str
   if (!waiter) return;
   const tabId = connection.tabId;
   waiter.tabId = tabId;
+  // Gemini stalled until visible; Claude also left its verified prompt unsent
+  // in the background. Activate their existing tab before the one dispatch.
+  // Serial Grok turns can confirm the user bubble while delaying the answer in
+  // a hidden tab. Keep that turn visible without changing Free-mode fanout.
+  const serialGrokTurn = provider === 'grok'
+    && activeCheckpoint?.workflowId === workflowId
+    && activeCheckpoint.mode !== 'free';
+  if (provider === 'gemini' || provider === 'claude' || serialGrokTurn) {
+    await chrome.tabs.update(tabId, { active: true });
+    checkAborted(workflowId);
+  }
   const documentId = await currentTopFrameDocumentId(tabId);
   if (responseWaiters.get(requestId) !== waiter
     || waiter.provider !== provider
@@ -789,6 +842,13 @@ async function sendAndWait(
   checkAborted(workflowId);
   const requestId = reservedRequestId ?? createProviderRequestId(provider, workflowId);
   const responsePromise = waitForResponse(provider, requestId, workflowId);
+  // The waiter is removed before its promise settles. Retain this request's
+  // evidence object so a completed/failed accepted send cannot revert to
+  // "not submitted" merely because the map entry has been cleaned up.
+  const pendingResponse = responseWaiters.get(requestId);
+  const submission = () => preserveStrongestSubmissionEvidence(
+    pendingResponse?.submission ?? 'not_submitted', submissionEvidenceForRequest(requestId),
+  );
   // Delivery and generation can fail independently while either is pending.
   void responsePromise.catch(() => {});
   try {
@@ -804,16 +864,16 @@ async function sendAndWait(
     checkAborted(workflowId);
     const providerError = response.match(/^\[Error:\s*(.+)]$/s);
     if (providerError) {
-      throw new ProviderRequestError(provider, workflowId, requestId, new Error(providerError[1]), true, submissionEvidenceForRequest(requestId));
+      throw new ProviderRequestError(provider, workflowId, requestId, new Error(providerError[1]), true, submission());
     }
     if (!response.trim()) {
-      throw new ProviderRequestError(provider, workflowId, requestId, new Error(encodeError('error.no_response_text', { provider })), true, submissionEvidenceForRequest(requestId));
+      throw new ProviderRequestError(provider, workflowId, requestId, new Error(encodeError('error.no_response_text', { provider })), true, submission());
     }
     return response;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     if (error instanceof ProviderRequestError) throw error;
-    throw new ProviderRequestError(provider, workflowId, requestId, error, false, submissionEvidenceForRequest(requestId));
+    throw new ProviderRequestError(provider, workflowId, requestId, error, false, submission());
   }
 }
 
@@ -901,10 +961,12 @@ function relayProviderResponse(message: ExtensionMessage, sender: chrome.runtime
     || !sender.tab.url || getProviderFromUrl(sender.tab.url) !== waiter.provider
     || (waiter.documentId !== undefined && (sender.documentId !== waiter.documentId || sender.frameId !== 0))) return;
   const done = message.action === 'RESPONSE_DONE';
+  const requiresText = activeCheckpoint?.workflowId === waiter.workflowId
+    && (activeCheckpoint.mode === 'coding' || activeCheckpoint.mode === 'roundtable');
+  const missingText = isMissingWorkflowText(message.payload);
+  if (!done && requiresText && missingText) return;
   if (done) waiter.settling = true;
-  const response = done && !message.payload.trim()
-    ? `[Error: ${encodeError('error.no_response_text', { provider: waiter.provider })}]`
-    : message.payload;
+  const response = done ? normalizeCompletedProviderResponse(waiter, message.payload) : message.payload;
   const responseError = done ? decodeError(response) : null;
   // Content messages also reach extension pages directly. The panel consumes only
   // this validated relay; keep chunks and completion ordered before advancing.
@@ -924,22 +986,30 @@ function relayProviderResponse(message: ExtensionMessage, sender: chrome.runtime
     await sendWorkflowDiagnostic({
       provider: waiter.provider,
       requestId,
-      // An encoded error is transport data for recovery, never extracted model
-      // output. Keeping it out of the extraction trace prevents an error's
-      // character count from being mistaken for an assistant response.
       stage: responseError ? 'response_error' : 'response_extracted',
       submission: waiter.submission,
       ...(responseError
-        ? {
-          failureKind: classifyProviderFailure(response),
-          failureCode: responseError.key,
-        }
+        ? { failureKind: classifyProviderFailure(response), failureCode: responseError.key }
         : { responseLength: response.length }),
     });
     waiter.resolve(response);
   }).catch((error: unknown) => {
     rejectResponseWaiter(requestId, error instanceof Error ? error : new Error(String(error)));
   });
+}
+
+function normalizeCompletedProviderResponse(waiter: ResponseWaiter, payload: string): string {
+  const requiresText = activeCheckpoint?.workflowId === waiter.workflowId
+    && (activeCheckpoint.mode === 'coding' || activeCheckpoint.mode === 'roundtable');
+  const missingText = isMissingWorkflowText(payload);
+  if (requiresText && missingText && payload.trim()) {
+    // A non-text reply is already delivered. It must never become eligible for
+    // automatic resend merely because this workflow requires textual content.
+    waiter.submission = preserveStrongestSubmissionEvidence(waiter.submission, 'submitted');
+  }
+  return !payload.trim() || (requiresText && missingText)
+    ? `[Error: ${encodeError('error.no_response_text', { provider: waiter.provider })}]`
+    : payload;
 }
 
 function rejectResponseWaiter(requestId: string, error: Error): void {
@@ -1236,6 +1306,10 @@ async function restoreCheckpointedWorkflow(
   lastWorkflowStatus = undefined;
   lastRoleAssignment = undefined;
   activeCheckpoint = checkpointForClient(checkpoint, target.clientId);
+  if (checkpoint.mode === 'coding' || checkpoint.mode === 'roundtable') {
+    activeCheckpoint.contributions = activeCheckpoint.contributions.map(item => isMissingWorkflowText(item.text)
+      ? { ...item, text: SKIP_RESPONSE, status: 'unavailable' } : item);
+  }
   await persistCheckpoint(activeCheckpoint);
   await workflowMarkerGate.run(() => chrome.storage.session.set({
     [ACTIVE_WORKFLOW_STORAGE_KEY]: {
@@ -1320,7 +1394,7 @@ async function reconcileCheckpointRequest(): Promise<void> {
     ? snapshot.submission : submissionEvidenceForState(state);
   const submission = preserveStrongestSubmissionEvidence(current.submission, observedSubmission);
   await checkpointProviderState(current.requestId, state, submission, documentId);
-  if (state === 'response_complete' && typeof snapshot?.response === 'string' && snapshot.response.trim()) {
+  if (state === 'response_complete' && typeof snapshot?.response === 'string') {
     resolveResumedResponse(current.requestId, snapshot.response);
   } else if (['existing_draft', 'recoverable_failure', 'uncertain_submission', 'terminal_failure',
     'rate_limited', 'temporarily_unavailable', 'not_ready'].includes(state)) {
@@ -1351,7 +1425,7 @@ async function reconcileCheckpointRequest(): Promise<void> {
         current.requestId,
         new Error(providerError?.[1] ?? encodeError('error.no_response_text', { provider: current.provider })),
         true,
-        submission,
+        preserveStrongestSubmissionEvidence(submission, waiter.submission),
       );
     }
     await checkpointContribution(current.turnKey, current.provider, response, 'complete', checkpointMetadata(current));
@@ -1366,6 +1440,7 @@ async function reconcileCheckpointRequest(): Promise<void> {
 function resolveResumedResponse(requestId: string, response: string): void {
   const waiter = responseWaiters.get(requestId);
   if (!waiter) return;
+  response = normalizeCompletedProviderResponse(waiter, response);
   clearTimeout(waiter.timer);
   responseWaiters.delete(requestId);
   void chrome.runtime.sendMessage({
@@ -1560,7 +1635,8 @@ async function handleConsultMode(text: string, roles: ConsultRoles, workflowId: 
 
 async function handleCodingMode(text: string, roles: CodingRoles, workflowId: string): Promise<void> {
   const stage = async (number: number, key: string, provider: AIProvider, role: string, actionKey: string, prompt: string): Promise<string> => {
-    sendCodingStatus(number, provider, actionKey);
+    await sendCodingStatus(number, provider, actionKey);
+    checkAborted(workflowId);
     return runSerialWorkflowTurn({ key: `coding:${key}`, provider, labelKey: `role.${role}`, role }, prompt, workflowId);
   };
   const spec = await stage(1, 'spec', roles.planner, 'planner', 'coding.spec', PROMPTS.coding.plannerSpec(text)); checkAborted(workflowId);
@@ -1674,8 +1750,8 @@ async function handleRoundtableMode(text: string, roles: RoundtableRoles, workfl
   });
 }
 
-function sendCodingStatus(current: number, provider: AIProvider, actionKey: string): void {
-  sendWorkflowStatus({ key: 'workflow.coding', params: { current, provider: name(provider), actionKey } });
+function sendCodingStatus(current: number, provider: AIProvider, actionKey: string): Promise<void> {
+  return sendWorkflowStatus({ key: 'workflow.coding', params: { current, provider: name(provider), actionKey }, progress: workflowProgress(8) });
 }
 
 function status(key: string, provider: AIProvider): WorkflowStatusPayload {
@@ -1703,7 +1779,7 @@ async function sendWorkflowStatus(
   clientId = activeClientId,
 ): Promise<void> {
   if (workflowId && workflowId === activeWorkflowId && !payload.done) {
-    lastWorkflowStatus = { key: payload.key, params: payload.params };
+    lastWorkflowStatus = { ...payload };
   }
   await chrome.runtime.sendMessage({
     action: 'WORKFLOW_STATUS',
@@ -1715,7 +1791,8 @@ async function sendWorkflowDiagnostic(event: Omit<WorkflowDiagnosticPayload,
   'workflowId' | 'turnId' | 'sessionId' | 'clientId'> & { turnId?: string }): Promise<void> {
   const current = activeCheckpoint?.current;
   const currentMatchesRequest = !event.requestId || current?.requestId === event.requestId;
-  const turnId = event.turnId ?? (currentMatchesRequest ? current?.turnKey : undefined) ?? activeTurn?.key;
+  const turnId = event.turnId ?? (currentMatchesRequest ? current?.turnKey : undefined) ?? activeTurn?.key
+    ?? (activeCheckpoint?.mode === 'free' && event.requestId ? `free:${event.provider}` : undefined);
   const workflowId = activeWorkflowId;
   if (!workflowId || !turnId) return;
   const role = event.role ?? activeTurn?.role;

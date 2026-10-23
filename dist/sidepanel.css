@@ -239,6 +239,9 @@
   }
 }
 @layer utilities {
+  .invisible {
+    visibility: hidden;
+  }
   .visible {
     visibility: visible;
   }
@@ -316,6 +319,9 @@
   }
   .mr-2 {
     margin-right: calc(var(--spacing) * 2);
+  }
+  .mr-auto {
+    margin-right: auto;
   }
   .mb-1 {
     margin-bottom: var(--spacing);
@@ -768,6 +774,9 @@
   .pb-1 {
     padding-bottom: var(--spacing);
   }
+  .pb-2 {
+    padding-bottom: calc(var(--spacing) * 2);
+  }
   .pb-3 {
     padding-bottom: calc(var(--spacing) * 3);
   }
@@ -850,6 +859,9 @@
   .tracking-wide {
     --tw-tracking: var(--tracking-wide);
     letter-spacing: var(--tracking-wide);
+  }
+  .\[overflow-wrap\:anywhere\] {
+    overflow-wrap: anywhere;
   }
   .break-words {
     overflow-wrap: break-word;

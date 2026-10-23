@@ -11,6 +11,7 @@ import {
   isGrokSendControl,
   grokSessionReady,
   updateGrokTextControl,
+  isGrokAssistantResponseCandidate,
 } from '../src/content/grokDom.ts';
 import { firstAcceptedCandidate } from '../src/content/elementSelection.ts';
 import { decideLoginStatus } from '../src/content/loginStatusStability.ts';
@@ -18,6 +19,13 @@ import {
   clearedComposerConfirmsSend,
   generationSignalBelongsToCurrentTurn,
 } from '../src/content/sendConfirmation.ts';
+
+test('Grok rejects shared Markdown candidates inside a user message but keeps real assistant and legacy bodies', () => {
+  const prompt = { closest: (selector: string) => selector.includes('[data-testid="user-message"]') ? {} : null };
+  const answer = { closest: () => null };
+  assert.equal(isGrokAssistantResponseCandidate(prompt as unknown as Element), false);
+  assert.equal(isGrokAssistantResponseCandidate(answer as unknown as Element), true);
+});
 
 interface FakeInput {
   ariaLabel: string | null;

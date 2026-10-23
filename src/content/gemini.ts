@@ -2,12 +2,14 @@ import { createContentScript } from './base';
 import { injectGeminiInput, readGeminiComposerText, geminiComposerMatches } from './geminiInput';
 import {
   GEMINI_INPUT_SELECTORS,
+  GEMINI_USER_MESSAGE_SELECTORS,
   GEMINI_SEND_SELECTORS,
   GEMINI_STOP_SELECTORS,
   isUsableGeminiComposerInput,
   isGeminiSendControl,
   isGeminiStopControl,
   isVisibleGeminiElement,
+  readGeminiUserMessageText,
 } from './geminiDom';
 
 function hasVisibleElement(selectors: readonly string[], filter: (element: Element) => boolean = () => true): boolean {
@@ -25,6 +27,11 @@ createContentScript({
   inputMatchesPrompt: geminiComposerMatches,
   preserveExistingDraft: true,
   sendConfirmation: 'single-activation',
+  userMessageSelectors: GEMINI_USER_MESSAGE_SELECTORS,
+  userMessageTracking: 'semantic-count',
+  userMessageText: readGeminiUserMessageText,
+  sendConfirmationTimeoutMs: 30_000,
+  acknowledgeOnRequestStart: true,
   // The verified click must not wait on a timer: Chrome can defer timers in a
   // background provider tab, which otherwise leaves a valid draft unsent until
   // the user visits Gemini.
