@@ -161,3 +161,7 @@ Please run `npm run verify` before opening a pull request. For a provider-page b
 Sponsored by [AI-Sister.com](https://ai-sister.com). Created by Ted Huang ([TED@TED-H.com](mailto:TED@TED-H.com), [ted-h.com](https://ted-h.com)).
 
 Special thanks to [@DaveTseng2019](https://github.com/DaveTseng2019) for substantial v0.2.x contributions: send and response reliability, connection recovery, localized error handling, dark mode, Side Panel UX, the transparent icon, and the project license.
+
+## Provider Architecture Documentation
+
+For more detailed information on provider integration setup, environment variable requirements for testing, and the error fallback architecture, please refer to the [Provider Architecture Documentation](./docs/provider-architecture.md).
