@@ -1970,3 +1970,21 @@ for (const state of ['recoverable_failure', 'uncertain_submission']) {
     await second.command({ action: 'RESOLVE_STEP_RECOVERY', payload: { ...recovery, action: 'cancel' } });
   });
 }
+
+test('PUBLISH_HACKMD rejects messages from tabs', async () => {
+  const app = worker({}, false);
+  await app.ready;
+  const result = await app.command({ action: 'PUBLISH_HACKMD', payload: { token: 'token', title: 'title', content: 'content' } }, { tab: { id: 1 } });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'Unauthorized sender');
+  app.close();
+});
+
+test('PUBLISH_HACKMD rejects messages from other extensions', async () => {
+  const app = worker({}, false);
+  await app.ready;
+  const result = await app.command({ action: 'PUBLISH_HACKMD', payload: { token: 'token', title: 'title', content: 'content' } }, { id: 'other-extension-id' });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'Unauthorized sender');
+  app.close();
+});
