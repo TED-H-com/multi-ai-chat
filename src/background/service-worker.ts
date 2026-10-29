@@ -392,6 +392,10 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
     }
 
     case 'PUBLISH_HACKMD':
+      if (sender.tab || (sender.id && sender.id !== chrome.runtime.id)) {
+        sendResponse({ ok: false, error: 'Unauthorized sender' });
+        return false;
+      }
       handleHackMDPublish(message.payload as { token: string; title: string; content: string })
         .then((result) => sendResponse({ ok: true, result }))
         .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
