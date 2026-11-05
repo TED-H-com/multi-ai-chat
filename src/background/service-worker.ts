@@ -308,6 +308,10 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       return true;
     }
     case 'GET_CONNECTIONS':
+      if (sender.tab || (sender.id && sender.id !== chrome.runtime.id)) {
+        sendResponse({});
+        return false;
+      }
       sendResponse(connections);
       // 先回快取讓側邊欄立即有內容，再重新探測一次；結果會透過 broadcastConnections 送達。
       // 沒有這一步的話，快取一旦是 disconnected 就只能等下一次分頁載入事件才會更新。
@@ -316,6 +320,10 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       return true;
 
     case 'GET_PROVIDER_URLS':
+      if (sender.tab || (sender.id && sender.id !== chrome.runtime.id)) {
+        sendResponse({});
+        return false;
+      }
       void getProviderUrls().then(sendResponse).catch(() => sendResponse({}));
       return true;
 
@@ -361,6 +369,10 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
     }
 
     case 'OPEN_LOGIN':
+      if (sender.tab || (sender.id && sender.id !== chrome.runtime.id)) {
+        sendResponse({ ok: false, error: 'Unauthorized sender' });
+        return false;
+      }
       if (!message.provider) return false;
       focusOrOpenProvider(message.provider)
         .then(() => sendResponse({ ok: true }))

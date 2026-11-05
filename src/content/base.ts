@@ -975,7 +975,8 @@ export function createContentScript(config: ContentScriptConfig): void {
     sendTimeouts.clear();
   }
 
-  const runtimeListener = (message: ExtensionMessage, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+  const runtimeListener = (message: ExtensionMessage, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+    if (sender.id && sender.id !== chrome.runtime.id) return false;
     if (message.action === 'SEND_MESSAGE' && message.provider === provider) {
       const { text = '' } = (message.payload as { text?: string } | undefined) ?? {};
       void sendMessage(text, message.requestId, message.workflowId)
