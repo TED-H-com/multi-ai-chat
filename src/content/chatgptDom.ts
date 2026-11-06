@@ -51,6 +51,19 @@ export const CHATGPT_STOP_SELECTORS = [
 
 export const CHATGPT_USER_MESSAGE_SELECTORS = [
   '[data-message-author-role="user"]',
+  '[data-user-message-bubble] [data-search-result-target]',
+];
+
+export const CHATGPT_RESPONSE_SELECTORS = [
+  '[data-message-author-role="assistant"]',
+  '[data-testid="assistant-message"]',
+  '[data-message-author-role="assistant"] .markdown',
+  '[data-message-author-role="assistant"] .prose',
+  '[data-testid="assistant-message"] .markdown',
+  '[data-testid^="conversation-turn-"]',
+  // Observed in the current signed-in web layout, which has no legacy
+  // message-role or conversation-turn test IDs.
+  '[data-markdown-text-style="assistant-message"]',
 ];
 
 const EXPLICIT_COMPOSER_SELECTOR = '[data-testid*="composer"], form[data-type="unified-composer"], form[data-chatgpt-composer]';
@@ -118,8 +131,25 @@ export function isChatGptStopControl(element: ClosestCapableElement): boolean {
     || isWithinChatGptComposer(element);
 }
 
+// ChatGPT sometimes places the assistant reply inside a conversation-turn wrapper,
+// while older builds expose data-message-author-role directly. The outer wrapper
+// is a safe fallback only when it demonstrably belongs to an assistant turn:
+// a generic conversation-turn wrapper may contain a user prompt instead.
+export function isChatGptAssistantResponseTurn(turn: ChatGptTurnElement): boolean {
+  return turn.matches('[data-message-author-role="assistant"], [data-testid="assistant-message"], [data-turn="assistant"], [data-role="assistant"]')
+    || Boolean(turn.querySelector('[data-message-author-role="assistant"]'))
+    || Boolean(turn.querySelector('[data-testid="assistant-message"], [data-turn="assistant"], [data-role="assistant"]'));
+}
+
+export function chatGptResponseContentRoot(response: Element): Element {
+  if (response.matches('[data-testid^="conversation-turn-"]')) {
+    // Do not serialize the surrounding turn's status/actions as answer text.
+    return response.querySelector('[data-message-author-role="assistant"], [data-testid="assistant-message"], [data-turn="assistant"], [data-role="assistant"]') ?? response;
+  }
+  return response;
+}
+
 export function isIncompleteChatGptAssistantTurn(turn: ChatGptTurnElement): boolean {
-  const assistant = turn.matches('[data-message-author-role="assistant"]')
-    || Boolean(turn.querySelector('[data-message-author-role="assistant"]'));
+  const assistant = isChatGptAssistantResponseTurn(turn);
   return assistant && !turn.querySelector('[data-testid="copy-turn-action-button"]');
 }

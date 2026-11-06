@@ -26,10 +26,11 @@ import {
 import { getLocale, setLocale as setActiveLocale, SUPPORTED_LOCALES, t } from '../shared/i18n';
 import { applyTheme, THEME_MODES, watchSystemTheme } from '../shared/theme';
 import { getHackMDToken, publishToHackMD } from '../shared/hackmd';
+import { startWorkerConnection } from './workerConnection';
 import { buildConversationReplayContext } from '../shared/conversationContinuity';
 import {
-  MAX_CONVERSATIONS,
   commitActiveConversation,
+  prepareNewConversation,
   createConversationPersister,
   payloadFromInputs,
   storageReadFailed,
@@ -147,6 +148,7 @@ export default function App() {
   const [isResolvingRecovery, setIsResolvingRecovery] = useState(false);
   const [trace, setTrace] = useState<TraceEntry[]>([]);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [traceViewerOpen, setTraceViewerOpen] = useState(false);
   const [showRoleConfig, setShowRoleConfig] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -301,33 +303,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    let stopped = false;
-    let port: chrome.runtime.Port | undefined;
-    let reconnectTimer: number | undefined;
-    const connect = () => {
-      if (stopped) return;
-      port = chrome.runtime.connect({ name: 'multi-ai-sidepanel' });
-      port.onDisconnect.addListener(() => {
-        port = undefined;
-        if (!stopped) reconnectTimer = window.setTimeout(connect, 1000);
-      });
-    };
-    connect();
-    const heartbeat = window.setInterval(() => {
-      try {
-        port?.postMessage({ type: 'heartbeat' });
-      } catch {
-        port = undefined;
-      }
-    }, 20_000);
-    return () => {
-      stopped = true;
-      window.clearInterval(heartbeat);
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
-      port?.disconnect();
-    };
-  }, []);
+  useEffect(() => startWorkerConnection(chrome.runtime), []);
 
   useEffect(() => {
     const listener = (message: { action: string; provider?: AIProvider; requestId?: string; workflowId?: string; payload?: unknown }, sender: chrome.runtime.MessageSender = {}) => {
@@ -518,7 +494,7 @@ export default function App() {
   }, []);
 
   const changeMode = (nextMode: ChatMode) => {
-    if (isProcessing) return;
+    if (!hydrated || isProcessing) return;
     setContextNeedsReplay(Boolean(messages.length));
     setMode(nextMode);
     setShowRoleConfig(false);
@@ -639,23 +615,21 @@ export default function App() {
   };
 
   const startNewConversation = () => {
-    if (isProcessing) return;
+    if (!hydrated || isProcessing) return;
     conversationRevisionRef.current += 1;
     if (activeWorkflowIdRef.current) ignoreWorkflow(activeWorkflowIdRef.current, ignoredWorkflowIdsRef);
     activeWorkflowIdRef.current = undefined;
     const committed = commitCurrentConversation();
-    // notes: 已經有空對話就重用它，只更新時間，避免堆出一串重複的「新對話」
-    const reusable = committed.find((candidate) => !candidate.messages?.length);
-    const conversation = reusable ?? newConversation();
-    const nextConversations = reusable
-      ? committed.map((candidate) => candidate.id === reusable.id ? { ...candidate, updatedAt: Date.now() } : candidate)
-      : [conversation, ...committed].slice(0, MAX_CONVERSATIONS);
-    const nextRoles = repairRoles(DEFAULT_DEBATE_ROLES, standbyProvider);
+    const nextMode = persistInputsRef.current.mode;
+    const nextRoles = repairRoles(persistInputsRef.current.roles, standbyProvider);
+    const { conversation, conversations: nextConversations } = prepareNewConversation(
+      committed, nextMode, nextRoles, t('session.untitled'),
+    );
     persistInputsRef.current = {
       conversations: nextConversations,
       activeConversationId: conversation.id,
       messages: [],
-      mode: 'free',
+      mode: nextMode,
       roles: nextRoles,
       providerUrls: {},
     };
@@ -665,7 +639,7 @@ export default function App() {
     setMessages([]);
     setProviderUrls({});
     setContextNeedsReplay(false);
-    setMode('free');
+    setMode(nextMode);
     setRoles(nextRoles);
     setTrace([]);
     setWorkflowStatus(null);
@@ -870,7 +844,7 @@ export default function App() {
       </header>
 
       <section className="min-h-0 max-h-[46vh] shrink overflow-y-auto overscroll-contain border-b border-slate-200 bg-white px-3 py-3">
-        <ModeSelector mode={mode} onModeChange={changeMode} disabled={isProcessing} />
+        <ModeSelector mode={mode} onModeChange={changeMode} disabled={!hydrated || isProcessing} />
 
         {mode === 'free' && (
           <div role="group" aria-label={t('targets.title')} className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
@@ -914,6 +888,14 @@ export default function App() {
           </div>
         </details>
 
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+          <button type="button" onClick={() => setTraceViewerOpen(true)}
+            className="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100"
+            aria-label="View complete workflow history">
+            View full workflow log ({trace.length})
+          </button>
+        </div>
+
         <details className="mt-2 rounded-lg border border-slate-200 bg-white" open={isProcessing || traceOpen} onToggle={(event) => setTraceOpen(event.currentTarget.open)}>
           <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700"><span className={`mr-2 inline-block h-2 w-2 rounded-full ${isProcessing ? 'animate-pulse bg-sky-500' : 'bg-emerald-500'}`} />{t('trace.title')} · <span className="font-normal text-slate-500">{currentStatus}</span></summary>
           {workflowStatus?.progress && <div className="border-t border-slate-100 px-2.5 py-1.5 text-[11px] text-slate-600">
@@ -938,14 +920,47 @@ export default function App() {
 
       <ChatArea messages={messages} mode={mode} conversationId={activeConversationId} />
 
+      {traceViewerOpen && (
+        <div role="dialog" aria-modal="true" aria-label="Complete workflow history"
+          className="absolute inset-0 z-50 flex min-h-0 min-w-0 flex-col overflow-hidden bg-white text-slate-900"
+          onKeyDown={(event) => { if (event.key === 'Escape') setTraceViewerOpen(false); }}>
+          <header className="flex flex-none items-center justify-between gap-2 border-b border-slate-200 px-3 py-3">
+            <h2 className="min-w-0 break-words text-sm font-bold">Complete workflow history ({trace.length})</h2>
+            <button type="button" onClick={() => setTraceViewerOpen(false)}
+              className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-100">
+              Close
+            </button>
+          </header>
+          <div role="log" aria-live="off" aria-label="All workflow events"
+            className="min-h-0 min-w-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 py-3 [overflow-wrap:anywhere]">
+            {trace.length === 0 && <p className="text-xs text-slate-500">No workflow events yet.</p>}
+            {trace.map((entry) => (
+              <div key={entry.id} className="whitespace-pre-wrap break-words border-b border-slate-100 pb-2 text-xs leading-relaxed text-slate-700">
+                <time className="mr-1 font-semibold">{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+                · {entry.text}
+              </div>
+            ))}
+            {stepRecovery && <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+              {AI_PROVIDERS[stepRecovery.provider].name}: {humanizeError(stepRecovery.reason)}
+              <p className="mt-1">Close this log to access Retry, Skip, or Cancel.</p>
+            </div>}
+          </div>
+          <div className="flex-none border-t border-slate-200 px-3 py-2 text-[11px] text-slate-500">
+            Scroll this panel to read the entire history. No events are hidden or truncated.
+          </div>
+        </div>
+      )}
+
+
+
       <div className="flex-none border-t border-slate-200 bg-white px-3 py-1.5">
         <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs text-slate-500">
-          <button type="button" onClick={startNewConversation} disabled={isProcessing} className="hover:text-sky-700 disabled:opacity-30">{t('app.new')}</button>
+          <button type="button" onClick={startNewConversation} disabled={!hydrated || isProcessing} className="hover:text-sky-700 disabled:opacity-30">{t('app.new')}</button>
           <button type="button" onClick={exportConversation} disabled={!messages.length} className="hover:text-sky-700 disabled:opacity-30">{t('app.export')}</button>
           <button type="button" onClick={() => void publishConversation()} disabled={!messages.length || isPublishing} className="hover:text-sky-700 disabled:opacity-30">{isPublishing ? t('publish.publishing') : t('app.publish')}</button>
         </div>
       </div>
-      <InputBar onSend={handleSend} onCancel={stopWorkflow} disabled={!hydrated || isProcessing || !readiness.canSend}
+      <InputBar mode={mode} onSend={handleSend} onCancel={stopWorkflow} disabled={!hydrated || isProcessing || !readiness.canSend}
         isProcessing={isProcessing} readinessNotice={readinessNotice}
         onOpenUnready={readiness.unready.length ? () => { void handleOpenUnready(); } : undefined}
         isOpeningUnready={isOpeningUnready} readinessOpenError={readinessOpenError} />
@@ -958,7 +973,7 @@ export default function App() {
               <h2 className="flex-1 text-sm font-semibold">{t('session.history')}</h2>
               <button type="button" onClick={closeDrawer} className="rounded-sm px-2 py-1 text-xs text-slate-500 hover:bg-slate-100">{t('app.close')}</button>
             </div>
-            <div className="p-3"><button type="button" disabled={isProcessing} onClick={startNewConversation} className="w-full rounded-xl border border-sky-300 bg-sky-50 px-3 py-2 text-left text-sm font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-50">＋ {t('app.new')}</button></div>
+            <div className="p-3"><button type="button" disabled={!hydrated || isProcessing} onClick={startNewConversation} className="w-full rounded-xl border border-sky-300 bg-sky-50 px-3 py-2 text-left text-sm font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-50">＋ {t('app.new')}</button></div>
             <div className="flex-1 space-y-1 overflow-y-auto px-2 pb-3">
               {conversations.length === 0 && <p className="p-3 text-xs text-slate-500">{t('session.empty')}</p>}
               {conversations.map((conversation) => (

@@ -15,6 +15,15 @@ const ALL_PROVIDERS: AIProvider[] = ['chatgpt', 'claude', 'gemini', 'grok', 'met
 const THEME_MODES = ['system', 'light', 'dark'] as const;
 const activeProviders: AIProvider[] = ['chatgpt', 'claude', 'gemini', 'grok'];
 
+test('Markdown display preserves intraword underscores in provider replies', () => {
+  const MarkdownText = loadComponent('../src/sidepanel/components/MarkdownText.tsx').default;
+  const literal = renderToStaticMarkup(React.createElement(MarkdownText, { text: 'MULTIAI_OK_1410 and foo__bar__baz' }));
+  assert.match(literal, /MULTIAI_OK_1410 and foo__bar__baz/);
+  const emphasis = renderToStaticMarkup(React.createElement(MarkdownText, { text: '_emphasis_ and __strong__' }));
+  assert.match(emphasis, /<em[^>]*>emphasis<\/em>/);
+  assert.match(emphasis, /<strong[^>]*>strong<\/strong>/);
+});
+
 function loadComponent(
   relativePath: string,
   reactImpl: typeof React = React,
@@ -358,6 +367,17 @@ test('mode selector keeps a named group with exactly one pressed mode', () => {
   assert.equal((markup.match(/aria-pressed="true"/g) ?? []).length, 1);
   assert.equal((markup.match(/aria-pressed="false"/g) ?? []).length, 4);
   assert.match(markup, />Coding<\/span>/);
+});
+
+test('Coding and Roundtable remain visible next to Send independently of the scrolled mode selector', () => {
+  for (const mode of ['coding', 'roundtable']) {
+    const { markup } = mountInputBar({ mode });
+    assert.ok(markup.includes(`aria-label="Chat mode: ${t(`mode.${mode}`)}"`));
+    assert.ok(markup.includes(`>${t(`mode.${mode}`)}</span>`));
+  }
+  const source = readFileSync(new URL('../src/sidepanel/App.tsx', import.meta.url), 'utf8');
+  assert.match(source, /ModeSelector[^\n]+disabled=\{!hydrated \|\| isProcessing\}/);
+  assert.match(source, /<InputBar mode=\{mode\}/);
 });
 
 test('workflow controls retain every trace entry in one reachable scroll container and keep New chat reachable', () => {

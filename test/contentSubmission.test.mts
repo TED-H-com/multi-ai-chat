@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import test, { type TestContext } from 'node:test';
 import ts from 'typescript';
+import { appendResponseLanguagePolicy } from '../src/shared/promptLanguage.ts';
 
 function content(t: TestContext, options: {
   strict?: boolean;
@@ -19,8 +20,14 @@ function content(t: TestContext, options: {
   disabled?: boolean;
   clearOnClick?: boolean;
   deferFirstInjection?: boolean;
+  injectMismatch?: boolean;
   useGrokAdapter?: boolean;
   loggedOut?: boolean;
+  useGeminiAdapter?: boolean;
+  useClaudeAdapter?: boolean;
+  formatInjectedText?: (text: string) => string;
+  grokPromptMarkdown?: boolean;
+  prepareResponse?: (response: any) => boolean;
 } = {}) {
   let now = 10000;
   let timerId = 0;
@@ -81,7 +88,7 @@ function content(t: TestContext, options: {
     dispatchEvent(event: { type: string }) { if (event.type === 'keydown') enters++; return true; }
     compareDocumentPosition() { return 4; }
   }
-  class Textarea extends Element { value = ''; }
+  class Textarea extends Element { value = ''; get innerText() { return this.value; } }
   let input = Object.assign(new Textarea(), { value: options.draft ?? '' });
   const send = Object.assign(new Element(), {
     disabled: options.disabled ?? false,
@@ -98,6 +105,11 @@ function content(t: TestContext, options: {
       if (selector === '#stop') return stopAvailable ? [stop] : [];
       if (selector === '#user') return users;
       if (selector === '#answer') return responses;
+      // Observed Claude layout has no font-claude-response/message classes.
+      // Only its assistant-scoped transcript body contains the answer.
+      if (options.useClaudeAdapter && selector.split(', ').includes(
+        '[data-testid="assistant-message"] [data-transcript-engine-root]',
+      )) return responses;
       return [];
     },
   };
@@ -137,26 +149,40 @@ function content(t: TestContext, options: {
     load(fileURLToPath(new URL('../src/content/grok.ts', import.meta.url)));
     captureAdapter = false;
   }
+  if (options.useGeminiAdapter) {
+    captureAdapter = true;
+    load(fileURLToPath(new URL('../src/content/gemini.ts', import.meta.url)));
+    captureAdapter = false;
+  }
+  if (options.useClaudeAdapter) {
+    captureAdapter = true;
+    load(fileURLToPath(new URL('../src/content/claude.ts', import.meta.url)));
+    captureAdapter = false;
+  }
+  const singleMode = Boolean(options.single || options.useGeminiAdapter || options.useClaudeAdapter);
   load(fileURLToPath(new URL('../src/content/base.ts', import.meta.url))).createContentScript({
     ...adapterConfig,
     provider: 'grok', inputSelectors: ['#input'], sendButtonSelectors: ['#send'],
     userMessageSelectors: ['#user'], userMessageTracking: 'semantic-count',
-    sendConfirmation: options.useGrokAdapter ? adapterConfig.sendConfirmation
-      : options.single ? 'single-activation' : options.strict === false ? 'heuristic' : 'matching-user-message',
-    preserveExistingDraft: options.preserveExistingDraft,
-    readInputText: options.readInputText,
-    inputMatchesPrompt: options.inputMatchesPrompt,
+    sendConfirmation: options.useGrokAdapter || options.useClaudeAdapter ? adapterConfig.sendConfirmation
+      : singleMode ? 'single-activation' : options.strict === false ? 'heuristic' : 'matching-user-message',
+    userMessageText: options.useGrokAdapter ? adapterConfig.userMessageText : undefined,
+    preserveExistingDraft: options.preserveExistingDraft ?? (options.useClaudeAdapter ? adapterConfig.preserveExistingDraft : undefined),
+    readInputText: options.readInputText ?? (options.useClaudeAdapter ? adapterConfig.readInputText : undefined),
+    inputMatchesPrompt: options.inputMatchesPrompt ?? (options.useClaudeAdapter ? adapterConfig.inputMatchesPrompt : undefined),
     requireSameComposerForClearConfirmation: true,
-    responseSelectors: ['#answer'], responseTracking: 'semantic-latest',
+    responseSelectors: options.useClaudeAdapter ? adapterConfig.responseSelectors : ['#answer'], responseTracking: 'semantic-latest',
+    prepareResponse: options.prepareResponse,
     stopButtonSelectors: ['#stop'], stopButtonFilter: () => true,
-    requireMatchingUserMessageForGenerationSignals: !options.single,
-    anchorSemanticResponsesAfterMatchingUserMessage: !options.single,
+    requireMatchingUserMessageForGenerationSignals: !singleMode,
+    anchorSemanticResponsesAfterMatchingUserMessage: !singleMode,
     inputFilter: () => true, sendButtonFilter: () => true, isThinking: () => thinking,
     loginDetector: () => true,
     loggedOutDetector: () => loggedOut,
     injectInput: (editor: Textarea, text: string, isActive?: () => boolean) => {
       if (isActive) injectionGuards.push(isActive);
-      injections++; editor.value = text;
+      injections++; editor.value = options.injectMismatch ? 'partial insertion' : options.formatInjectedText?.(text) ?? text;
+      if (options.injectMismatch) throw new Error('editor content changed after native insertion');
       if (options.deferFirstInjection && injections === 1) {
         return new Promise<void>(resolve => { releaseInjection = resolve; });
       }
@@ -181,12 +207,28 @@ function content(t: TestContext, options: {
     thinking(value: boolean) { thinking = value; },
     replaceComposer(draft = '') { input.isConnected = false; input = Object.assign(new Textarea(), { value: draft }); },
     clearComposer() { input.value = ''; },
+    remountUser(element: any) {
+      users[users.length - 1].isConnected = false;
+      users[users.length - 1] = element;
+      mutation();
+    },
     releaseInjection() { releaseInjection?.(); },
     injectionIsActive: (index: number) => injectionGuards[index]?.(),
     showStop() { stopAvailable = true; },
     stopClicks: () => stopClicks,
-    accepted(text = 'prompt') { users.push(Object.assign(new Element(), { textContent: text })); mutation(); },
-    answer(text: string) { responses.push(Object.assign(new Element(), { textContent: text })); mutation(); },
+    accepted(text = 'prompt') {
+      const user = Object.assign(new Element(), { textContent: text });
+      if (options.grokPromptMarkdown) {
+        const promptMarkdown = Object.assign(new Element(), {
+          textContent: text,
+          closest: (selector: string) => selector.includes('[data-testid="user-message"]') ? user : null,
+        });
+        user.compareDocumentPosition = (candidate?: unknown) => candidate === promptMarkdown ? 4 | 16 : 4;
+        responses.push(promptMarkdown);
+      }
+      users.push(user); mutation();
+    },
+    answer(text: string, notify = true) { responses.push(Object.assign(new Element(), { textContent: text })); if (notify) mutation(); },
     remountAnswers() {
       const texts = responses.map((response) => response.textContent);
       responses.splice(0, responses.length, ...texts.map((textContent) => Object.assign(new Element(), { textContent })));
@@ -197,6 +239,94 @@ function content(t: TestContext, options: {
     done: () => messages.filter(message => message.action === 'RESPONSE_DONE'),
     chunks: () => messages.filter(message => message.action === 'RESPONSE_CHUNK'),
   };
+}
+
+test('response preparation holds back a folded preview until complete code is readable without resending', async t => {
+  let ready = false;
+  const app = content(t, { prepareResponse: () => ready });
+  await app.send(); await app.advance(800); app.accepted();
+  app.answer('Introduction only');
+  await app.advance(15000);
+  assert.equal(app.done().length, 0);
+  assert.equal(app.chunks().length, 0);
+  ready = true;
+  app.answer('Introduction\nfunction add(a, b) { return a + b; }');
+  await app.advance(3000);
+  assert.equal(app.done()[0]?.payload, 'Introduction function add(a, b) { return a + b; }');
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
+});
+
+test('a late folded preview cannot finalize an earlier cached introduction', async t => {
+  let ready = true;
+  const app = content(t, { prepareResponse: () => ready });
+  await app.send(); await app.advance(800); app.accepted();
+  app.answer('Intro');
+  ready = false;
+  await app.advance(10000);
+  assert.equal(app.done().length, 0);
+  ready = true;
+  app.answer('Intro\ncomplete implementation');
+  await app.advance(3000);
+  assert.equal(app.done()[0]?.payload, 'Intro complete implementation');
+});
+
+test('a prepared fresh answer replaces a longer cached rendering with transient UI text', async t => {
+  const app = content(t, { prepareResponse: () => true });
+  await app.send(); await app.advance(800); app.accepted();
+  app.answer('Implementing add function Show thinking JavaScript javascript flattened code and transient labels');
+  // Final hydration lands before the done timer; no observer callback is needed
+  // for the final re-read to take precedence over the longer stale cache.
+  app.answer('function add(a, b) { return a + b; }', false);
+  await app.advance(1000);
+  assert.equal(app.done()[0]?.payload, 'function add(a, b) { return a + b; }');
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
+});
+
+test('Claude submits its own paragraph-formatted workflow prompt once after insertion', async t => {
+  const prompt = appendResponseLanguagePolicy('--- Current user task ---\nRepair check: reply exactly OK\n--- End current user task ---');
+  const app = content(t, { useClaudeAdapter: true, formatInjectedText: text => text.replace(/\n/g, '\n\n') });
+  assert.equal((await app.send('claude', prompt)).ok, true);
+  await app.advance(800);
+  app.accepted(prompt); app.answer('OK');
+  await app.advance(15000);
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
+  assert.equal(app.done()[0]?.payload, 'OK');
+});
+
+test('Claude extracts its current transcript body after a real submission signal without a legacy response class', async t => {
+  const app = content(t, { useClaudeAdapter: true });
+  assert.equal((await app.send('claude', 'Reply exactly MULTIAI_OK_1413')).ok, true);
+  await app.advance(800);
+  app.thinking(true);
+  await app.advance(15000);
+  assert.equal(app.done().length, 0);
+  app.answer('MULTIAI_OK_1413');
+  app.thinking(false);
+  await app.advance(15000);
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
+  assert.equal(app.done()[0]?.payload, 'MULTIAI_OK_1413');
+});
+
+test('Claude reuses an identical retained workflow draft without editing or replaying send', async t => {
+  const prompt = appendResponseLanguagePolicy('Reply exactly OK');
+  const draft = prompt.replace(/\n/g, '\n\n');
+  const app = content(t, { useClaudeAdapter: true, draft });
+  assert.equal((await app.send('claude', prompt)).ok, true);
+  await app.advance(15000);
+  assert.equal(app.draft(), draft);
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 0 });
+  assert.match(app.done()[0]?.payload, /error.send_unconfirmed/);
+});
+
+for (const [draft, prompt] of [['my unfinished draft', 'Reply exactly OK'], ['Keep "a b"', 'Keep "a  b"']]) {
+  test(`Claude preserves a genuinely different draft: ${draft}`, async t => {
+    const app = content(t, { useClaudeAdapter: true, draft });
+    assert.equal((await app.send('claude', prompt)).ok, false);
+    await app.advance(15000);
+    assert.equal(app.draft(), draft);
+    assert.deepEqual(app.counts(), { clicks: 0, enters: 0, injections: 0 });
+    assert.match(app.done()[0]?.payload, /error.existing_draft/);
+  });
 }
 
 test('single activation preserves an unrelated existing draft and significant quoted whitespace', async t => {
@@ -281,6 +411,59 @@ test('single activation accepts a new response without repeating the send', asyn
   await app.advance(15000);
   assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
   assert.equal(app.done()[0]?.payload, 'current response');
+});
+
+test('Gemini acknowledges reservation before a background editor settles and still sends only once', async t => {
+  const app = content(t, { useGeminiAdapter: true, deferFirstInjection: true });
+  t.after(() => app.releaseInjection());
+  let acknowledgement: any;
+  const delivery = app.send().then(value => { acknowledgement = value; });
+  await app.flush();
+  assert.equal(acknowledgement?.ok, true);
+  assert.deepEqual(app.counts(), { clicks: 0, enters: 0, injections: 1 });
+  app.releaseInjection();
+  await app.flush();
+  app.accepted(); app.answer('Gemini background answer');
+  await app.advance(35000);
+  await delivery;
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
+  assert.equal(app.done()[0]?.payload, 'Gemini background answer');
+});
+
+test('a transient positive generation signal stays accepted through a quiet confirmation deadline', async t => {
+  const app = content(t, { single: true });
+  await app.send(); await app.advance(800);
+  app.thinking(true);
+  await app.advance(3000);
+  app.thinking(false);
+  await app.advance(10000);
+  assert.equal(app.done().length, 0);
+  app.accepted(); app.answer('late final answer');
+  await app.advance(3000);
+  assert.equal(app.done()[0]?.payload, 'late final answer');
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
+});
+
+test('early Gemini admission does not acknowledge a duplicate busy request or send after cancellation', async t => {
+  const app = content(t, { useGeminiAdapter: true, deferFirstInjection: true });
+  t.after(() => app.releaseInjection());
+  assert.equal((await app.send()).ok, true);
+  assert.equal((await app.send()).ok, false);
+  await app.stop();
+  app.releaseInjection();
+  await app.advance(35000);
+  assert.deepEqual(app.counts(), { clicks: 0, enters: 0, injections: 1 });
+  assert.equal(app.done().length, 0);
+});
+
+test('an editor failure after early Gemini admission is still delivered as a scoped failure', async t => {
+  const app = content(t, { useGeminiAdapter: true, injectMismatch: true });
+  assert.equal((await app.send()).ok, true);
+  await app.advance(35000);
+  assert.deepEqual(app.counts(), { clicks: 0, enters: 0, injections: 1 });
+  assert.equal(app.done().length, 1);
+  assert.equal(app.done()[0]?.requestId, 'request');
+  assert.match(app.done()[0]?.payload, /error.input_injection_failed/);
 });
 
 test('a configured composer reader rejects changed provider text before any Send activation', async t => {
@@ -432,6 +615,39 @@ test('injection guard captures the request generation across an awaited cancella
   assert.equal((await old).ok, false);
   assert.equal(app.done().length, 0);
   assert.equal(app.draft(), 'new prompt');
+});
+
+test('the Grok adapter waits for a genuine reply instead of emitting its submitted prompt Markdown', async t => {
+  const app = content(t, { useGrokAdapter: true, grokPromptMarkdown: true });
+  await app.send('grok', 'A long prompt with workflow instructions and response language policy');
+  await app.advance(800);
+  app.accepted('A long prompt with workflow instructions and response language policy');
+  await app.advance(3000);
+  assert.equal(app.done().length, 0);
+  assert.equal(app.chunks().length, 0);
+  app.answer('A short genuine Grok answer');
+  await app.advance(15000);
+  assert.equal(app.done()[0]?.payload, 'A short genuine Grok answer');
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
+});
+
+test('Grok reacquires a remounted accepted user turn after its ordered list becomes rendered Markdown', async t => {
+  const app = content(t, { useGrokAdapter: true });
+  const prompt = 'Tasks:\n1. Check input\n2. Check overflow';
+  await app.send('grok', prompt); await app.advance(800);
+  app.accepted(prompt);
+  const textNode = (textContent: string) => ({ nodeType: 3, textContent });
+  const node = (tagName: string, childNodes: any[]) => ({ nodeType: 1, tagName, childNodes, getAttribute: () => null });
+  const rendered = Object.assign(node('DIV', [
+    node('P', [textNode('Tasks:')]), node('OL', [
+      node('LI', [textNode('Check input')]), node('LI', [textNode('Check overflow')]),
+    ]),
+  ]), { isConnected: true, innerText: 'Tasks:\nCheck input\nCheck overflow', compareDocumentPosition: () => 4 });
+  app.remountUser(rendered);
+  app.answer('Genuine test report');
+  await app.advance(15000);
+  assert.equal(app.done()[0]?.payload, 'Genuine test report');
+  assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
 });
 
 test('Grok preserves a different existing draft without activating submission', async t => {
@@ -620,4 +836,15 @@ test('login gate after activation ends the request as authentication without res
   assert.match(app.done()[0].payload, /error.not_ready/);
   assert.deepEqual(app.counts(), { clicks: 1, enters: 0, injections: 1 });
   assert.equal((await app.queryRequest()).submission, 'uncertain');
+});
+
+test('a partially applied native edit becomes an existing draft without a second send', async t => {
+  const app = content(t, { strict: true, injectMismatch: true });
+  const delivery = await app.send('request', 'full requested text');
+  assert.equal(delivery.ok, false);
+  assert.deepEqual(app.counts(), { clicks: 0, enters: 0, injections: 1 });
+  assert.equal(app.draft(), 'partial insertion');
+  assert.match(app.done()[0]?.payload, /error.existing_draft/);
+  await app.advance(20000);
+  assert.deepEqual(app.counts(), { clicks: 0, enters: 0, injections: 1 });
 });

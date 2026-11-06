@@ -16,7 +16,7 @@
     "check:version": "node scripts/check-version.js",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.mts\"",
-    "verify": "npm run typecheck && npm run test && npm run build && npm run check:version",
+    "verify": "npm run typecheck && npm run build && npm run test && npm run check:version",
     "clean": "rimraf dist"
   },
   "devDependencies": {

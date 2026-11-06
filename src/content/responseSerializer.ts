@@ -24,6 +24,13 @@ const TABLE_SECTION_TAGS = new Set(['TBODY', 'TFOOT', 'THEAD']);
 
 interface SerializationContext {
   protectedBlocks: string[];
+  preserveTextWhitespace: boolean;
+  codeBlockSelectors: readonly string[];
+}
+
+interface SerializationOptions {
+  preserveTextWhitespace?: boolean;
+  codeBlockSelectors?: readonly string[];
 }
 
 // Which text to hand back when a response is finalized. Measured on ChatGPT: the stop button
@@ -35,14 +42,15 @@ export function longerResponseText(cached: string, fresh: string | null): string
   return fresh && fresh.length > cached.length ? fresh : cached;
 }
 
-export type ResponseContentRoot = (response: Element) => Element;
+export type ResponseContentRoot = (response: Element) => Element | Element[];
 
 export function extractResponseContent(
   response: Element,
   selectContentRoot: ResponseContentRoot = (root) => root,
 ): string | null {
   const contentRoot = selectContentRoot(response);
-  const text = serializeResponseText(contentRoot);
+  const roots = Array.isArray(contentRoot) ? contentRoot : [contentRoot];
+  const text = roots.map((root) => serializeResponseText(root)).filter(Boolean).join('\n\n');
   if (text) return text;
 
   // Generated media may live next to (rather than inside) the provider's Markdown root.
@@ -56,8 +64,12 @@ export function extractResponseContent(
   return alt ? `[Image generated: ${alt}]` : '[Image generated]';
 }
 
-export function serializeResponseText(root: Element): string {
-  const context: SerializationContext = { protectedBlocks: [] };
+export function serializeResponseText(root: Element, options: SerializationOptions = {}): string {
+  const context: SerializationContext = {
+    protectedBlocks: [],
+    preserveTextWhitespace: options.preserveTextWhitespace ?? false,
+    codeBlockSelectors: options.codeBlockSelectors ?? [],
+  };
   const serialized = normalizeDocument(serializeNode(root, context));
   // Replacer function, not a string: `$&`, `$'` and `` $` `` inside a code block would be
   // expanded by String.replace as substitution patterns, rewriting the code that gets restored.
@@ -68,14 +80,18 @@ export function serializeResponseText(root: Element): string {
 }
 
 function serializeNode(node: Node, context: SerializationContext): string {
-  if (node.nodeType === TEXT_NODE) return normalizeText(node.textContent ?? '');
+  if (node.nodeType === TEXT_NODE) return context.preserveTextWhitespace ? node.textContent ?? '' : normalizeText(node.textContent ?? '');
   const element = node as Element;
   if (node.nodeType !== ELEMENT_NODE && node.nodeType !== undefined) return '';
   if (typeof element.tagName !== 'string') return '';
   if (OMITTED_TAGS.has(tagName(element)) || attribute(element, 'aria-hidden') === 'true') return '';
-  if (!element.childNodes) return normalizeText(element.textContent ?? '');
+  if (!element.childNodes) return context.preserveTextWhitespace ? element.textContent ?? '' : normalizeText(element.textContent ?? '');
 
   const tag = tagName(element);
+  if (context.codeBlockSelectors.some((selector) => element.matches?.(selector))) {
+    const pre = firstDescendantByTag(element, 'PRE');
+    if (pre) return block(protectCodeBlock(pre, context));
+  }
   if (tag === 'BR') return '\n';
   if (tag === 'HR') return block('---');
   if (tag === 'PRE') return block(protectCodeBlock(element, context));
@@ -197,8 +213,11 @@ function serializeTableCellChildren(element: Element): string {
 
 function protectCodeBlock(element: Element, context: SerializationContext): string {
   const codeElement = firstDescendantByTag(element, 'CODE');
-  const code = (codeElement?.textContent ?? element.textContent ?? '').replace(/\r\n?/g, '\n');
-  const language = codeLanguage(codeElement ?? element);
+  const codeRoot = codeElement ?? element;
+  // Syntax highlighters can put each line in a block span without newline text
+  // nodes. innerText retains those line boundaries and indentation.
+  const code = ((codeRoot as HTMLElement).innerText || codeRoot.textContent || '').replace(/\r\n?/g, '\n');
+  const language = (codeElement ? codeLanguage(codeElement) : '') || codeLanguage(element);
   const longestFence = Math.max(0, ...Array.from(code.matchAll(/`+/g), (match) => match[0].length));
   const fence = '`'.repeat(Math.max(3, longestFence + 1));
   const blockText = `${fence}${language ? language : ''}\n${code}${code.endsWith('\n') ? '' : '\n'}${fence}`;
@@ -238,7 +257,7 @@ function safeHttpUrl(value: string | undefined): string | undefined {
 function codeLanguage(element: Element): string {
   const className = attribute(element, 'class') ?? '';
   const classMatch = className.match(/(?:^|\s)language-([\w+-]+)/i);
-  const candidate = classMatch?.[1] ?? attribute(element, 'data-language') ?? '';
+  const candidate = classMatch?.[1] ?? attribute(element, 'data-language') ?? attribute(element, 'data-lang') ?? '';
   return /^[\w+-]+$/.test(candidate) ? candidate : '';
 }
 

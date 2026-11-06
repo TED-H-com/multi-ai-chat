@@ -7,6 +7,8 @@ import {
   isChatGptSendControl,
   isChatGptStopControl,
   isIncompleteChatGptAssistantTurn,
+  isChatGptAssistantResponseTurn,
+  chatGptResponseContentRoot,
 } from '../src/content/chatgptDom.ts';
 import { firstAcceptedCandidate } from '../src/content/elementSelection.ts';
 
@@ -111,4 +113,23 @@ test('an unanswered user turn is not mistaken for active assistant generation', 
   assert.equal(isIncompleteChatGptAssistantTurn(turn('user', false)), false);
   assert.equal(isIncompleteChatGptAssistantTurn(turn('assistant', false)), true);
   assert.equal(isIncompleteChatGptAssistantTurn(turn('assistant', true)), false);
+});
+
+test('ChatGPT conversation-turn fallback accepts assistant-owned turns, never user turns', () => {
+  const turn = (role: 'user' | 'assistant') => ({
+    matches: () => false,
+    querySelector: (selector: string) => selector.includes('[data-message-author-role="assistant"]')
+      && role === 'assistant' ? {} : null,
+  });
+  assert.equal(isChatGptAssistantResponseTurn(turn('assistant')), true);
+  assert.equal(isChatGptAssistantResponseTurn(turn('user')), false);
+});
+
+test('ChatGPT response root isolates the assistant body from its outer turn', () => {
+  const responseBody = { tagName: 'DIV' } as Element;
+  const outer = {
+    matches: (query: string) => query.includes('conversation-turn-'),
+    querySelector: (query: string) => query.includes('assistant') ? responseBody : null,
+  } as unknown as Element;
+  assert.strictEqual(chatGptResponseContentRoot(outer), responseBody);
 });

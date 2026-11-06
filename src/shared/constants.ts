@@ -112,8 +112,12 @@ export const DEFAULT_ROUNDTABLE_ROLES: RoundtableRoles = {
 
 // === Prompt Templates for Serial Modes ===
 
-function userTaskReference(question: string): string {
-  return `--- User task and conversation context ---\n${question}\n--- End user task and conversation context ---`;
+function userTaskReference(question: string, workflow?: 'coding' | 'roundtable'): string {
+  const reference = `--- User task and conversation context ---\n${question}\n--- End user task and conversation context ---`;
+  if (!workflow) return reference;
+  const evidence = `Workflow contribution requirements:\nFollow the user's explicit output format and length limits. Return only your assigned contribution for the current turn; do not simulate other participants or future turns. Evaluate only the contributions actually supplied. A skipped or missing contribution is unavailable evidence, not agreement or abstention. Do not claim a review passed or a consensus was established when the required evidence is missing.`;
+  const code = workflow === 'coding' ? `\nMissing source code cannot pass review or acceptance; do not assume an implementation exists. When implementing, provide complete source code rather than a heading, image, or readiness claim; use fenced code blocks unless the user requested another format. Distinguish proposed tests and reasoned review from tests actually executed. Claim execution only when actual execution results are supplied.` : '';
+  return `${reference}\n\n${evidence}${code}`;
 }
 
 function aiResponseReference(label: string, response: string): string {
@@ -182,7 +186,7 @@ export const PROMPTS = {
         5: `You are ${speakerName}.\n\nRound 5: Final conclusions\nThis is the final round. Give your final conclusions:\n1. How much has your position changed through four rounds? Which specific arguments changed your mind?\n2. What do you now consider true about this topic? More than one perspective may be valid\n3. Which questions remain unresolved?\n\nPrioritize candor over appearing correct. Explain how your position developed.`,
       };
 
-      let prompt = `${roundInstructions[round]}\n\n${userTaskReference(question)}`;
+      let prompt = `${roundInstructions[round]}\n\n${userTaskReference(question, 'roundtable')}`;
 
       if (history.length > 0) {
         const historyText = history
@@ -197,23 +201,23 @@ export const PROMPTS = {
   coding: {
     // Step 1: Planner writes spec
     plannerSpec: (question: string) =>
-      `You are a software architecture planner. Write a complete implementation plan for the requirements below:\n1. Requirements analysis and boundary conditions\n2. Technology choices and their rationale\n3. File structure\n4. Each module's responsibilities and interface definitions\n5. Pseudocode for key algorithms\n6. Potential edge cases\n\nMake the plan complete enough to implement without further questions.\n\n${userTaskReference(question)}`,
+      `You are a software architecture planner. Write a complete implementation plan for the requirements below:\n1. Requirements analysis and boundary conditions\n2. Technology choices and their rationale\n3. File structure\n4. Each module's responsibilities and interface definitions\n5. Pseudocode for key algorithms\n6. Potential edge cases\n\nMake the plan complete enough to implement without further questions.\n\n${userTaskReference(question, 'coding')}`,
 
     // Step 2: Reviewer reviews spec
     reviewerSpec: (question: string, spec: string, plannerName: string) =>
-      `You are a rigorous technical reviewer. ${plannerName} wrote an implementation plan for the following requirements.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${plannerName} implementation plan`, spec)}\n\nReview it critically:\n1. Logical gaps\n2. Missing edge cases\n3. Security issues\n4. Whether the architecture is sound\n5. Better approaches\n\nYour job is to identify problems candidly. Also recognize what the plan does well.`,
+      `You are a rigorous technical reviewer. ${plannerName} wrote an implementation plan for the following requirements.\n\n${userTaskReference(question, 'coding')}\n\n${aiResponseReference(`${plannerName} implementation plan`, spec)}\n\nReview it critically:\n1. Logical gaps\n2. Missing edge cases\n3. Security issues\n4. Whether the architecture is sound\n5. Better approaches\n\nYour job is to identify problems candidly. Also recognize what the plan does well.`,
 
     // Step 3: Coder writes v1
     coderV1: (question: string, spec: string, plannerName: string, specReview: string, reviewerName: string) =>
-      `You are a senior engineer. Write the first complete implementation using the specification and review below.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${plannerName} specification`, spec)}\n\n${aiResponseReference(`${reviewerName} specification review`, specReview)}\n\nRequirements:\n1. Address all issues raised in the review\n2. Include error handling and edge cases\n3. Use your professional judgment when the specification and review conflict\n\nThis is version one, with code review and testing still to come. Complete the core functionality first.`,
+      `You are a senior engineer. Write the first complete implementation using the specification and review below.\n\n${userTaskReference(question, 'coding')}\n\n${aiResponseReference(`${plannerName} specification`, spec)}\n\n${aiResponseReference(`${reviewerName} specification review`, specReview)}\n\nRequirements:\n1. Address all issues raised in the review\n2. Include error handling and edge cases\n3. Use your professional judgment when the specification and review conflict\n\nThis is version one, with code review and testing still to come. Complete the core functionality first.`,
 
     // Step 4: Reviewer reviews code
     reviewerCode: (question: string, code: string, coderName: string) =>
-      `You are a rigorous code reviewer. ${coderName} implemented version one from the specification.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${coderName} code (v1)`, code)}\n\nPerform a complete code review:\n1. Bugs and logical errors\n2. Missing edge cases\n3. Code quality: naming, structure, and readability\n4. Performance issues\n5. Security issues\n\nGive each issue a severity (Critical / Major / Minor) and specific recommendations for fixing it.`,
+      `You are a rigorous code reviewer. ${coderName} implemented version one from the specification.\n\n${userTaskReference(question, 'coding')}\n\n${aiResponseReference(`${coderName} code (v1)`, code)}\n\nPerform a complete code review:\n1. Bugs and logical errors\n2. Missing edge cases\n3. Code quality: naming, structure, and readability\n4. Performance issues\n5. Security issues\n\nGive each issue a severity (Critical / Major / Minor) and specific recommendations for fixing it.`,
 
     // Step 5: Tester writes test cases + hunts bugs
     testerCases: (question: string, code: string, coderName: string) =>
-      `You are a rigorous QA engineer. Examine ${coderName}'s first implementation from a testing perspective.\n\n${userTaskReference(question)}\n\n${aiResponseReference(`${coderName} code (v1)`, code)}\n\nTasks:\n1. List key test cases for normal paths, boundaries, invalid input, and concurrency or state issues\n2. Reason through whether each case would pass this implementation; explain specifically why any would fail\n3. Identify bugs that code review may miss but testing can reveal, such as race conditions, resource leaks, and boundary overflows\n4. Where applicable, provide ready-to-use unit or integration test code\n\nGoal: use testing to catch problems missed by code review.`,
+      `You are a rigorous QA engineer. Examine ${coderName}'s first implementation from a testing perspective.\n\n${userTaskReference(question, 'coding')}\n\n${aiResponseReference(`${coderName} code (v1)`, code)}\n\nTasks:\n1. List key test cases for normal paths, boundaries, invalid input, and concurrency or state issues\n2. Reason through whether each case would pass this implementation; explain specifically why any would fail\n3. Identify bugs that code review may miss but testing can reveal, such as race conditions, resource leaks, and boundary overflows\n4. Where applicable, provide ready-to-use unit or integration test code\n\nGoal: use testing to catch problems missed by code review.`,
 
     // Step 6: Coder fixes → v2 (based on review + tests)
     coderV2: (
@@ -224,14 +228,14 @@ export const PROMPTS = {
       testReport: string,
       testerName: string,
     ) =>
-      `You are a senior engineer. ${reviewerName} reviewed the code, and ${testerName} analyzed its tests.\n\n${userTaskReference(question)}\n\n${aiResponseReference('Your code (v1)', codeV1)}\n\n${aiResponseReference(`${reviewerName} code review`, codeReview)}\n\n${aiResponseReference(`${testerName} test report`, testReport)}\n\nFix the issues found by review and testing to produce version two:\n1. Address every Critical and Major issue\n2. Ensure the code can pass all test cases identified by the tester\n3. Add brief comments explaining key changes\n4. Explain your reasoning if you disagree with a review or testing recommendation\n\nOutput the complete version-two code.`,
+      `You are a senior engineer. ${reviewerName} reviewed the code, and ${testerName} analyzed its tests.\n\n${userTaskReference(question, 'coding')}\n\n${aiResponseReference('Your code (v1)', codeV1)}\n\n${aiResponseReference(`${reviewerName} code review`, codeReview)}\n\n${aiResponseReference(`${testerName} test report`, testReport)}\n\nFix the issues found by review and testing to produce version two:\n1. Address every Critical and Major issue\n2. Ensure the code can pass all test cases identified by the tester\n3. Add brief comments explaining key changes\n4. Explain your reasoning if you disagree with a review or testing recommendation\n\nOutput the complete version-two code.`,
 
     // Step 7: Planner does acceptance
     plannerAcceptance: (question: string, codeV2: string, coderName: string, originalSpec: string) =>
-      `You are the software architecture planner and the requirements owner. ${coderName} revised the code using the specification, code review, and test report.\n\n${userTaskReference(question)}\n\n${aiResponseReference('Your original specification', originalSpec)}\n\n${aiResponseReference(`${coderName} code (v2)`, codeV2)}\n\nPerform acceptance testing:\n1. Does version two implement every feature in the original requirements?\n2. Does it follow your architecture?\n3. Are there deviations from the specification?\n4. What still needs adjustment?\n\nIf all checks pass, clearly state that acceptance passed in the user's intended response language. Otherwise, list the items that need correction.`,
+      `You are the software architecture planner and the requirements owner. ${coderName} revised the code using the specification, code review, and test report.\n\n${userTaskReference(question, 'coding')}\n\n${aiResponseReference('Your original specification', originalSpec)}\n\n${aiResponseReference(`${coderName} code (v2)`, codeV2)}\n\nPerform acceptance testing:\n1. Does version two implement every feature in the original requirements?\n2. Does it follow your architecture?\n3. Are there deviations from the specification?\n4. What still needs adjustment?\n\nIf all checks pass, clearly state that acceptance passed in the user's intended response language. Otherwise, list the items that need correction.`,
 
     // Step 8: Coder final fix
     coderFinal: (question: string, codeV2: string, acceptance: string, plannerName: string) =>
-      `You are a senior engineer. ${plannerName} performed acceptance testing on your version-two code.\n\n${userTaskReference(question)}\n\n${aiResponseReference('Your code (v2)', codeV2)}\n\n${aiResponseReference(`${plannerName} acceptance results`, acceptance)}\n\nIf acceptance passed, output the final code with any final polish. If corrections are needed, make them before outputting the final version.\n\nEnsure the final version:\n1. Addresses all acceptance feedback\n2. Is ready to use\n3. Includes necessary documentation or usage instructions`,
+      `You are a senior engineer. ${plannerName} performed acceptance testing on your version-two code.\n\n${userTaskReference(question, 'coding')}\n\n${aiResponseReference('Your code (v2)', codeV2)}\n\n${aiResponseReference(`${plannerName} acceptance results`, acceptance)}\n\nIf acceptance passed, output the final code with any final polish. If corrections are needed, make them before outputting the final version.\n\nEnsure the final version:\n1. Addresses all acceptance feedback\n2. Is ready to use\n3. Includes necessary documentation or usage instructions`,
   },
 };

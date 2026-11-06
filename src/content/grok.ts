@@ -1,4 +1,5 @@
 import { createContentScript } from './base';
+import { focusWithoutScroll } from './focusWithoutScroll';
 import {
   GROK_ANCHOR_RESPONSES_AFTER_MATCHING_USER_MESSAGE,
   GROK_INPUT_SELECTORS,
@@ -10,10 +11,14 @@ import {
   isGrokGenerationActive,
   isGrokStopControl,
   isGrokSendControl,
+  grokComposerMatches,
+  readGrokComposerText,
   grokResponseContentRoot,
+  isGrokAssistantResponseCandidate,
   grokSessionReady,
   updateGrokTextControl,
 } from './grokDom';
+import { readGrokUserMessageText } from './grokUserMessage';
 
 function isVisible(element: Element): boolean {
   if (!(element instanceof HTMLElement)) return true;
@@ -56,6 +61,8 @@ createContentScript({
   inputSelectors: GROK_INPUT_SELECTORS,
   requireVisibleInput: true,
   inputFilter: isGrokComposerInput,
+  readInputText: readGrokComposerText,
+  inputMatchesPrompt: grokComposerMatches,
 
   sendButtonSelectors: [
     'button[data-testid="chat-submit"]',
@@ -71,6 +78,7 @@ createContentScript({
   // Retry sends the exact same prompt again. Count matching turns so a React remount of the
   // failed turn cannot masquerade as confirmation for the new attempt.
   userMessageTracking: 'semantic-count',
+  userMessageText: readGrokUserMessageText,
   sendConfirmation: 'matching-user-message',
   requireSameComposerForClearConfirmation: GROK_REQUIRE_SAME_COMPOSER_FOR_CLEAR_CONFIRMATION,
 
@@ -90,6 +98,7 @@ createContentScript({
   requireMatchingUserMessageForGenerationSignals: GROK_REQUIRE_MATCHING_USER_MESSAGE_FOR_GENERATION_SIGNALS,
   anchorSemanticResponsesAfterMatchingUserMessage: GROK_ANCHOR_RESPONSES_AFTER_MATCHING_USER_MESSAGE,
   responseContentRoot: grokResponseContentRoot,
+  responseFilter: isGrokAssistantResponseCandidate,
 
   stopButtonSelectors: GROK_STOP_SELECTORS,
   stopButtonFilter: isGrokStopControl,
@@ -107,10 +116,12 @@ createContentScript({
 
   isThinking: grokGenerationActive,
 
-  // Grok currently has both textarea and ProseMirror cohorts.
-  injectInput: async (el: Element, text: string) => {
+  // Grok has both a native textarea and a ProseMirror editor. One native edit
+  // is safer than synthetic DOM replacement: replacing React/ProseMirror-owned
+  // nodes can look right for a frame, but React restores its state before Send.
+  injectInput: async (el: Element, text: string, isActive: () => boolean = () => true) => {
     const editor = el as HTMLElement;
-    editor.focus();
+    focusWithoutScroll(editor);
     if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
       const prototype = el instanceof HTMLTextAreaElement
         ? window.HTMLTextAreaElement.prototype
@@ -128,33 +139,34 @@ createContentScript({
       );
       return;
     }
+    if (readGrokComposerText(el).trim()) throw new Error('live editor contains different text');
     const selection = window.getSelection();
+    if (!selection || typeof document.execCommand !== 'function') {
+      throw new Error('native contenteditable insertion unavailable');
+    }
     const range = document.createRange();
     range.selectNodeContents(editor);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    const clipboard = new DataTransfer();
-    clipboard.setData('text/plain', text);
-    editor.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }));
-    await Promise.resolve();
-
-    if (!matches(editor.textContent ?? '', text)) {
-      editor.focus();
-      range.selectNodeContents(editor);
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      document.execCommand('insertText', false, text);
-      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-      await Promise.resolve();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const accepted = document.execCommand('insertText', false, text);
+    // ProseMirror can reconcile the browser's native edit asynchronously.
+    // Reading after one microtask alone mistakenly treats an in-progress edit
+    // as a different draft, causing the subsequent safe retry to be blocked.
+    // Never edit a second time here: the first insertion may have landed.
+    const deadline = Date.now() + 4_000;
+    while (true) {
+      if (!isActive()) throw new Error('request cancelled during native editor reconciliation');
+      if (grokComposerMatches(el, text)) return;
+      if (!editor.isConnected) throw new Error('editor remounted after native insertion');
+      if (Date.now() >= deadline) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
-
-    if (!matches(editor.textContent ?? '', text)) {
-      editor.replaceChildren();
-      const paragraph = document.createElement('p');
-      paragraph.textContent = text;
-      editor.appendChild(paragraph);
-      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    if (readGrokComposerText(el).trim()) {
+      throw new Error('editor content changed after native insertion');
     }
+    throw new Error(accepted
+      ? 'native editor lost the requested prompt'
+      : 'native editor did not accept the requested prompt');
   },
 
   // Round 5 of roundtable carries 4 rounds × 4 speakers of history — generation can
@@ -162,7 +174,3 @@ createContentScript({
   doneDelay: 8000,
   chunkDebounce: 600,
 });
-
-function matches(actual: string, expected: string): boolean {
-  return actual.replace(/\s+/g, '') === expected.replace(/\s+/g, '');
-}

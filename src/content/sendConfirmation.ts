@@ -32,7 +32,7 @@ function visibleMarkdownKey(value: string): string {
 function normalizeFormattingWhitespace(value: string): string {
   // Quoted source can contain meaningful spaces. Only surrounding formatting
   // whitespace is collapsed, and word boundaries are never removed.
-  const literals = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g;
+  const literals = /"(?:\\.|[^"\\])*"|(?<![\p{L}\p{N}_])'(?:\\.|[^'\\])*'(?![\p{L}\p{N}_])/gu;
   let result = '';
   let end = 0;
   for (const match of value.matchAll(literals)) {

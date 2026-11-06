@@ -57,6 +57,7 @@ function content(t: TestContext, streamWhileThinking?: boolean, options: {
     getAttribute() { return null; }
     hasAttribute() { return false; }
     getClientRects() { return [{}]; }
+    querySelectorAll() { return []; }
   }
   class Textarea extends Element { value = ''; }
   const input = new Textarea();
