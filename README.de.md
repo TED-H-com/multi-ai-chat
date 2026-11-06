@@ -2,24 +2,23 @@
 
 [English](./README.md) · [繁體中文](./README.zh-TW.md) · [日本語](./README.ja.md) · **Deutsch** · [한국어](./README.ko.md)
 
-[Im Chrome Web Store installieren](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [Offizielle Website](https://ted-h-com.github.io/multi-ai-chat/?lang=de) · [Release v0.4.0](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.0) · [Desktop-Version](https://ted-h-com.github.io/multi-ai-chat-desktop/?lang=de)
+[Im Chrome Web Store installieren](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [Offizielle Website](https://ted-h-com.github.io/multi-ai-chat/?lang=de) · [Release v0.4.1](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.1) · [Desktop-Version](https://ted-h-com.github.io/multi-ai-chat-desktop/?lang=de)
 
 Einmal fragen, vier KIs gemeinsam einsetzen. Multi-AI Chat ist ein leichtes Chrome Side Panel, das deine angemeldeten **ChatGPT-, Claude-, Gemini- und Grok-Tabs** koordiniert. Es verwendet die Provider-Seiten, auf die du bereits Zugriff hast, ohne Modell-API-Schlüssel und ohne separaten Chat-Server.
 
-**Aktuelle Version: v0.4.0** · Chrome 114+ · Manifest V3 · Fünf Oberflächensprachen · MIT
+**Aktuelle Version: v0.4.1** · Chrome 114+ · Manifest V3 · Fünf Oberflächensprachen · MIT
 
 > Multi-AI Chat automatisiert Weboberflächen Dritter. Eine Änderung beim Provider kann Seiten-Selektoren vorübergehend unbrauchbar machen. Automatisierte Nutzung kann außerdem den jeweiligen Nutzungsbedingungen unterliegen. Verwende nur Konten und Inhalte, zu deren Nutzung du berechtigt bist.
 
 ![Multi-AI Chat führt in Chrome einen Workflow mit mehreren Providern aus](./store/screenshot-1280x800.png)
 
-**v0.4.0 enthält Meta AI als experimentellen Standby-Anbieter, standardmäßig aus.** Standardmäßig bleiben die bisherigen vier Anbieter aktiv. Unter **Einstellungen → Inaktiver Anbieter** lässt sich einer davon durch Meta AI ersetzen; immer bleiben genau vier aktiv. Beim Aktivieren von Meta wird der Zugriff auf meta.ai angefragt; lehnst du ab, bleibt Meta inaktiv. Ziele und Rollen werden angepasst, die Auswahl bleibt nach Neustarts erhalten und vorhandene Tabs sowie Anmeldungen bleiben bestehen. Metas Gastzugang hängt von Website und Region ab. Deaktivierte Eingabefelder gelten nicht als bereit.
+**v0.4.1 enthält Meta AI als experimentellen Standby-Anbieter, standardmäßig aus.** Standardmäßig bleiben die bisherigen vier Anbieter aktiv. Unter **Einstellungen → Inaktiver Anbieter** lässt sich einer davon durch Meta AI ersetzen; immer bleiben genau vier aktiv. Beim Aktivieren von Meta wird der Zugriff auf meta.ai angefragt; lehnst du ab, bleibt Meta inaktiv. Ziele und Rollen werden angepasst, die Auswahl bleibt nach Neustarts erhalten und vorhandene Tabs sowie Anmeldungen bleiben bestehen. Metas Gastzugang hängt von Website und Region ab. Deaktivierte Eingabefelder gelten nicht als bereit.
 
-## Änderungen in v0.4.0
+## Änderungen in v0.4.1
 
-- **Wiederherstellung nach Neustarts.** Workflow-Checkpoints sichern abgeschlossene Schritte und ausstehende Entscheidungen zur Wiederherstellung. Automatische Wiederherstellung bleibt standardmäßig aus. Bereits gesendete Anfragen und Anfragen mit unklarem Sendestatus werden nie automatisch wiederholt.
-- **Sprache und Website-Kompatibilität.** Die Antwortsprache richtet sich unabhängig von der Oberflächensprache nach der Aufgabe. Die Eingabeerkennung für ChatGPT, die Klartexteingabe für Gemini und die Anmeldungserkennung für Grok wurden verbessert; vorhandene Entwürfe bleiben geschützt.
-- **Panel und Wartung.** Senden und Stop bleiben in niedrigen Fenstern sichtbar; lange Ablaufprotokolle lassen sich scrollen. React, Tailwind, TypeScript und Build-Abhängigkeiten wurden aktualisiert.
-- **Prüfung und Grenzen.** 450 Tests und 131 Chromium-Fixture-Prüfungen bestanden; Senden und Empfangen als Gemini-Gast wurde praktisch geprüft. Angemeldete Workflows über alle fünf Anbieter, Stop und lange Antworten sind noch nicht durchgängig getestet. Meta AI bleibt experimentell und standardmäßig aus. Siehe die [vollständigen Versionshinweise](./store/RELEASE-v0.4.0.md).
+- Neue Chats behalten Modus und Rollen. Übergaben, Wiederherstellung und vollständige Code-Ausgabe in Coding und Rundtisch wurden korrigiert.
+- Verbesserte Eingabe- und Antworterkennung schützt Entwürfe und bereits gesendete Anfragen. Senderprüfung, effizientere Speicherung und Sicherheitsupdates für Build-Abhängigkeiten sind enthalten.
+- Das vollständige Ablaufprotokoll unterstützt fünf Sprachen und Tastaturbedienung. Produktionsdateien werden in isolierten Browser-Fixtures geprüft. Angemeldete Coding-/Rundtisch-Workflows wurden mit diesem Build noch nicht live geprüft; Meta bleibt experimentell und standardmäßig aus. [Versionshinweise](./store/RELEASE-v0.4.1.md).
 
 ## Die passende Version wählen
 
@@ -63,17 +62,17 @@ Der Eintrag im Chrome Web Store ist **v0.3.0** (aktualisiert am 2026-09-23) und 
 
 Die ZIP-Datei aus GitHub Releases dient als manuelle Alternative und kann direkt als entpackte Erweiterung geladen werden; ein Build aus dem Quellcode ist nicht erforderlich.
 
-> v0.4.0 ist auf GitHub verfügbar. ZIP und Prüfsumme unten sind die offiziellen Release-Dateien. Die Veröffentlichung im Chrome Web Store folgt einem separaten Einreichungs- und Prüfverfahren.
+> v0.4.1 ist auf GitHub verfügbar. ZIP und Prüfsumme unten sind die offiziellen Release-Dateien. Die Veröffentlichung im Chrome Web Store folgt einem separaten Einreichungs- und Prüfverfahren.
 
-1. Lade [`multi-ai-chat-store-v0.4.0.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip) und die zugehörige [Prüfsummendatei](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip.sha256) herunter.
-2. Prüfe das Archiv. Die erwartete SHA-256-Prüfsumme lautet `a128a939f9dd14606af6b8bb6c058377236664cd6ff537db4dbe6f999a145577`.
+1. Lade [`multi-ai-chat-store-v0.4.1.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip) und die zugehörige [Prüfsummendatei](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip.sha256) herunter.
+2. Prüfe das Archiv. Die erwartete SHA-256-Prüfsumme lautet `4255487cbcdd08c9028ddf3079bc5851b951ed124e10b695d8981144e5606edc`.
 
    ```powershell
-   (Get-FileHash .\multi-ai-chat-store-v0.4.0.zip -Algorithm SHA256).Hash.ToLower()
+   (Get-FileHash .\multi-ai-chat-store-v0.4.1.zip -Algorithm SHA256).Hash.ToLower()
    ```
 
    ```sh
-   shasum -a 256 multi-ai-chat-store-v0.4.0.zip
+   shasum -a 256 multi-ai-chat-store-v0.4.1.zip
    ```
 
 3. Entpacke die ZIP-Datei in einen dauerhaften Ordner. Direkt darin befindet sich `manifest.json`.

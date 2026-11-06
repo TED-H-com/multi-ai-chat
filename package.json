@@ -1,6 +1,6 @@
 {
   "name": "multi-ai-chat",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Chrome Side Panel for reliable multi-AI workflows across ChatGPT, Claude, Gemini, and Grok",
   "private": true,
   "type": "module",
@@ -18,7 +18,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.mts\"",
     "verify": "npm run typecheck && npm run build && npm run test && npm run check:version",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "benchmark": "node --test \"test/benchmarks/*.bench.mts\""
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

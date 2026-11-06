@@ -331,6 +331,21 @@ function worker(
   };
 }
 
+test('panel-only commands reject content tabs and foreign extensions without opening tabs', async (t) => {
+  const app = worker();
+  t.after(app.close);
+  await app.ready;
+  for (const sender of [{ tab: { id: 1, url: AI_PROVIDERS.chatgpt.url } }, { id: 'foreign-extension' }]) {
+    assert.equal(Object.keys(await app.command({ action: 'GET_CONNECTIONS' }, sender)).length, 0);
+    assert.equal(Object.keys(await app.command({ action: 'GET_PROVIDER_URLS' }, sender)).length, 0);
+    assert.equal((await app.command({ action: 'OPEN_LOGIN', provider: 'chatgpt' }, sender)).ok, false);
+  }
+  assert.equal(app.created.length, 0);
+  assert.equal(app.activations.length, 0);
+  assert.equal(Object.keys(await app.command({ action: 'GET_CONNECTIONS' })).length, 5);
+  assert.equal((await app.command({ action: 'OPEN_LOGIN', provider: 'chatgpt' })).ok, true);
+});
+
 test('worker default fanout excludes Meta even with all five tabs connected', async (t) => {
   const app = worker();
   t.after(app.close);

@@ -2,24 +2,23 @@
 
 [English](./README.md) · [繁體中文](./README.zh-TW.md) · **日本語** · [Deutsch](./README.de.md) · [한국어](./README.ko.md)
 
-[Chrome ウェブストアからインストール](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [公式サイト](https://ted-h-com.github.io/multi-ai-chat/?lang=ja) · [v0.4.0 リリース](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.0) · [デスクトップ版](https://ted-h-com.github.io/multi-ai-chat-desktop/?lang=ja)
+[Chrome ウェブストアからインストール](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [公式サイト](https://ted-h-com.github.io/multi-ai-chat/?lang=ja) · [v0.4.1 リリース](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.1) · [デスクトップ版](https://ted-h-com.github.io/multi-ai-chat-desktop/?lang=ja)
 
 質問は一度だけ。4つのAIをまとめて動かせます。Multi-AI Chat は、ログイン済みの **ChatGPT、Claude、Gemini、Grok** タブを連携させる軽量な Chrome Side Panel です。普段アクセスしている provider ページをそのまま利用するため、モデルAPIキーも独自のチャットbackendも必要ありません。
 
-**最新リリース：v0.4.0** · Chrome 114+ · Manifest V3 · 5言語UI · MIT
+**最新リリース：v0.4.1** · Chrome 114+ · Manifest V3 · 5言語UI · MIT
 
-**v0.4.0 には、初期状態ではオフの実験的な Meta AI 待機オプションがあります。** 初期状態では従来の4つが有効です。「**設定 → 待機中の AI**」でそのうち1つを選ぶと Meta AI が代わりに有効になり、同時に有効な AI は常に4つです。Meta を有効にすると meta.ai へのアクセスを求め、拒否した場合は Meta が待機のままになります。送信先と役割は自動調整され、再起動後も選択が保持されます。既存のタブやログインは削除しません。ゲスト利用は Meta の現在のサイトや地域によります。無効な入力欄は準備完了と判定しません。
+**v0.4.1 には、初期状態ではオフの実験的な Meta AI 待機オプションがあります。** 初期状態では従来の4つが有効です。「**設定 → 待機中の AI**」でそのうち1つを選ぶと Meta AI が代わりに有効になり、同時に有効な AI は常に4つです。Meta を有効にすると meta.ai へのアクセスを求め、拒否した場合は Meta が待機のままになります。送信先と役割は自動調整され、再起動後も選択が保持されます。既存のタブやログインは削除しません。ゲスト利用は Meta の現在のサイトや地域によります。無効な入力欄は準備完了と判定しません。
 
 > Multi-AI Chat は第三者のWeb UIを自動操作します。Provider 側のデザイン変更によってページ selector が一時的に動作しなくなることがあります。また、自動化は各サービスの利用規約の対象となる場合があります。利用権限のあるアカウントとコンテンツのみを使用してください。
 
 ![Chrome で複数 provider の workflow を実行する Multi-AI Chat](./store/screenshot-1280x800.png)
 
-## v0.4.0 の変更点
+## v0.4.1 の変更点
 
-- **再起動後の復旧。** ワークフローのチェックポイントに完了した手順と復旧待ちの選択を保存します。自動復旧は初期状態ではオフです。送信済み、または送信状態が不明な要求を自動で再送しません。
-- **言語とサイト互換性。** 回答言語を UI 言語と分けて扱います。ChatGPT の入力欄検出、Gemini のプレーンテキスト入力、Grok のログイン要求の検出を改善し、既存の下書きを保護します。
-- **パネルと保守。** 低いウィンドウでも Send／Stop を表示し、長い処理記録をスクロールできます。React、Tailwind、TypeScript とビルド依存関係を更新しました。
-- **検証と制限。** 450 件のテストと Chromium の fixture 検査 131 件が成功し、Gemini のゲスト送受信も実機で確認しました。ログイン後の 5 サイト全体のワークフロー、Stop、長文回答のエンドツーエンド検証は未実施です。Meta AI は実験的機能のまま、初期状態ではオフです。[詳細なリリースノート](./store/RELEASE-v0.4.0.md)を参照してください。
+- 新しい会話でもモードと役割を保持し、Coding／円卓討論の引き継ぎ、復旧、コード抽出を修正しました。
+- Provider の入力と応答の検出を改善し、下書きと送信済みの要求を保護します。メッセージ送信元の検証、保存処理の効率化、依存関係の脆弱性修正も含みます。
+- 完全な実行ログを5言語に対応させ、キーボード操作と隔離ブラウザでの検証を追加しました。今回のビルドのログイン済み Coding／円卓討論は未検証です。Meta は実験的機能で初期状態ではオフです。[リリースノート](./store/RELEASE-v0.4.1.md)。
 
 ## エディションを選ぶ
 
@@ -63,17 +62,17 @@ Chrome ウェブストアの掲載は **v0.3.0**（2026-09-23 更新）で、実
 
 GitHub Release の ZIP は手動インストール用のバックアップです。unpacked extension として直接読み込めるため、ソースの build は不要です。
 
-> v0.4.0 は GitHub で公開済みです。以下の ZIP と checksum が正式なリリースファイルです。Chrome ウェブストアへの公開は、別途の提出と審査に従います。
+> v0.4.1 は GitHub で公開済みです。以下の ZIP と checksum が正式なリリースファイルです。Chrome ウェブストアへの公開は、別途の提出と審査に従います。
 
-1. [`multi-ai-chat-store-v0.4.0.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip) と [checksum ファイル](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip.sha256)をダウンロードします。
-2. アーカイブを検証します。正しい SHA-256 は `a128a939f9dd14606af6b8bb6c058377236664cd6ff537db4dbe6f999a145577` です。
+1. [`multi-ai-chat-store-v0.4.1.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip) と [checksum ファイル](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip.sha256)をダウンロードします。
+2. アーカイブを検証します。正しい SHA-256 は `4255487cbcdd08c9028ddf3079bc5851b951ed124e10b695d8981144e5606edc` です。
 
    ```powershell
-   (Get-FileHash .\multi-ai-chat-store-v0.4.0.zip -Algorithm SHA256).Hash.ToLower()
+   (Get-FileHash .\multi-ai-chat-store-v0.4.1.zip -Algorithm SHA256).Hash.ToLower()
    ```
 
    ```sh
-   shasum -a 256 multi-ai-chat-store-v0.4.0.zip
+   shasum -a 256 multi-ai-chat-store-v0.4.1.zip
    ```
 
 3. ZIP を常設フォルダーへ展開します。その直下に `manifest.json` があります。

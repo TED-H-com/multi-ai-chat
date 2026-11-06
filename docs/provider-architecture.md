@@ -4,7 +4,7 @@ This document outlines how Multi-AI Chat coordinates multiple AI providers, the 
 
 ## Provider Integration Setup
 
-Multi-AI Chat operates by coordinating signed-in tabs for supported providers (ChatGPT, Claude, Gemini, Grok, and the standby Meta AI). It does not use model API keys; instead, it leverages the user's active web session for each provider.
+Multi-AI Chat operates by coordinating signed-in tabs for supported providers (ChatGPT, Claude, Gemini, Grok, and the standby Meta AI). It does not use model API keys; instead, it uses the user's active web session for each provider.
 
 - **Content Scripts:** Provider-specific DOM selectors and editor strategies are injected into the respective web pages (`src/content/*.ts`).
 - **Standby Provider Substitution:** The extension supports exactly four active providers at a time. Meta AI is included as an experimental standby provider. Through the extension settings, users can swap out one of the default providers to route requests to Meta AI instead. Roles and targets automatically follow the active selection, which persists across restarts.
@@ -39,3 +39,18 @@ Multi-AI Chat incorporates an error fallback and recovery architecture to handle
    - **Skip this turn:** Marks the provider's contribution as unavailable in the remaining context. It routes around the failure without inventing a response or silently reassigning the task to a different provider.
    - **Cancel:** Aborts the entire workflow safely.
 3. **DOM Fallbacks:** At the content script level, provider adapters use robust fallback selectors to locate input composers (e.g., trying standard `contenteditable` if a specific rich-text editor is not immediately detected). This prevents integration breakages when a provider updates their UI layout.
+
+## Release verification
+
+Run `npm run verify` for type checking, the production build, regression tests,
+and version consistency. `npm run benchmark` runs the optional latency checks.
+The production-panel browser checks, including mode switching, selected-target
+dispatch and independent response aggregation, live in
+`scripts/check-readiness-ui.cjs`; they use simulated Chrome APIs and are not a
+live-provider E2E pass. Run the provider fixture scripts separately using the
+browser variables above.
+
+Package the verified build with `python3 scripts/package-extension.py`. This
+creates the versioned ZIP and SHA-256 file in `store/` with stable ordering and
+metadata. Both release destinations use this script. Publisher authentication
+recovery is documented in [PUBLISHING-RECOVERY.md](../store/PUBLISHING-RECOVERY.md).

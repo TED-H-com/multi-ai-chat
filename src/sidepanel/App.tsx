@@ -149,6 +149,7 @@ export default function App() {
   const [trace, setTrace] = useState<TraceEntry[]>([]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceViewerOpen, setTraceViewerOpen] = useState(false);
+  const traceCloseRef = useRef<HTMLButtonElement>(null);
   const [showRoleConfig, setShowRoleConfig] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -222,6 +223,13 @@ export default function App() {
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!traceViewerOpen) return;
+    const opener = document.activeElement as HTMLElement | null;
+    traceCloseRef.current?.focus();
+    return () => { opener?.focus(); };
+  }, [traceViewerOpen]);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -891,8 +899,8 @@ export default function App() {
         <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
           <button type="button" onClick={() => setTraceViewerOpen(true)}
             className="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100"
-            aria-label="View complete workflow history">
-            View full workflow log ({trace.length})
+            aria-label={t('trace.view_full')}>
+            {t('trace.view_full')} ({trace.length})
           </button>
         </div>
 
@@ -921,19 +929,22 @@ export default function App() {
       <ChatArea messages={messages} mode={mode} conversationId={activeConversationId} />
 
       {traceViewerOpen && (
-        <div role="dialog" aria-modal="true" aria-label="Complete workflow history"
+        <div role="dialog" aria-modal="true" aria-label={t('trace.full_title')}
           className="absolute inset-0 z-50 flex min-h-0 min-w-0 flex-col overflow-hidden bg-white text-slate-900"
-          onKeyDown={(event) => { if (event.key === 'Escape') setTraceViewerOpen(false); }}>
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setTraceViewerOpen(false);
+            if (event.key === 'Tab') { event.preventDefault(); traceCloseRef.current?.focus(); }
+          }}>
           <header className="flex flex-none items-center justify-between gap-2 border-b border-slate-200 px-3 py-3">
-            <h2 className="min-w-0 break-words text-sm font-bold">Complete workflow history ({trace.length})</h2>
-            <button type="button" onClick={() => setTraceViewerOpen(false)}
+            <h2 className="min-w-0 break-words text-sm font-bold">{t('trace.full_title')} ({trace.length})</h2>
+            <button ref={traceCloseRef} type="button" onClick={() => setTraceViewerOpen(false)}
               className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold hover:bg-slate-100">
-              Close
+              {t('app.close')}
             </button>
           </header>
-          <div role="log" aria-live="off" aria-label="All workflow events"
+          <div role="log" aria-live="off" aria-label={t('trace.events')}
             className="min-h-0 min-w-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 py-3 [overflow-wrap:anywhere]">
-            {trace.length === 0 && <p className="text-xs text-slate-500">No workflow events yet.</p>}
+            {trace.length === 0 && <p className="text-xs text-slate-500">{t('trace.empty')}</p>}
             {trace.map((entry) => (
               <div key={entry.id} className="whitespace-pre-wrap break-words border-b border-slate-100 pb-2 text-xs leading-relaxed text-slate-700">
                 <time className="mr-1 font-semibold">{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
@@ -942,16 +953,14 @@ export default function App() {
             ))}
             {stepRecovery && <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
               {AI_PROVIDERS[stepRecovery.provider].name}: {humanizeError(stepRecovery.reason)}
-              <p className="mt-1">Close this log to access Retry, Skip, or Cancel.</p>
+              <p className="mt-1">{t('trace.recovery_hint')}</p>
             </div>}
           </div>
           <div className="flex-none border-t border-slate-200 px-3 py-2 text-[11px] text-slate-500">
-            Scroll this panel to read the entire history. No events are hidden or truncated.
+            {t('trace.scroll_hint')}
           </div>
         </div>
       )}
-
-
 
       <div className="flex-none border-t border-slate-200 bg-white px-3 py-1.5">
         <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs text-slate-500">

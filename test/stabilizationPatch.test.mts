@@ -55,8 +55,8 @@ test('Gemini adapter recognizes real user-query containers for positive send evi
 
 test('Side Panel exposes a dedicated vertically scrollable complete workflow log', () => {
   const src = readFileSync(new URL('../src/sidepanel/App.tsx', import.meta.url), 'utf8');
-  assert.match(src, /View full workflow log/);
-  assert.match(src, /aria-label="Complete workflow history"/);
+  assert.match(src, /t\('trace.view_full'\)/);
+  assert.match(src, /aria-label=\{t\('trace.full_title'\)\}/);
   assert.match(src, /role="log"/);
   assert.match(src, /min-h-0 min-w-0 flex-1 space-y-2 overflow-y-auto/);
   assert.match(src, /trace\.map\(\(entry\) =>/);

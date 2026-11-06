@@ -132,10 +132,7 @@ jobs:
           ARCHIVE: ${{ steps.package.outputs.archive }}
         run: |
           set -euo pipefail
-          (
-            cd dist
-            zip -qr "$ARCHIVE" .
-          )
+          python3 scripts/package-extension.py --output "$ARCHIVE"
           unzip -l "$ARCHIVE"
           unzip -p "$ARCHIVE" manifest.json | jq -e \
             --arg version "${{ steps.package.outputs.version }}" \
@@ -301,8 +298,11 @@ jobs:
           echo "publish_state=$(jq -r '.state // "unknown"' <<<"$publish_response")" >> "$GITHUB_OUTPUT"
 
       - name: Summarize result
+        if: always()
         shell: bash
         env:
+          JOB_STATUS: ${{ job.status }}
+          AUTH_OUTCOME: ${{ steps.auth.outcome }}
           MODE: ${{ inputs.publish_mode }}
           PUBLISH_STATE: ${{ steps.cws.outputs.publish_state }}
           SHA256: ${{ steps.bundle.outputs.sha256 }}
@@ -312,11 +312,18 @@ jobs:
           {
             echo '## Chrome Web Store result'
             echo
+            echo "- Workflow result: \`$JOB_STATUS\`"
+            echo "- Google authentication: \`$AUTH_OUTCOME\`"
             if [[ -n "$VERSION" ]]; then
               echo "- Version: \`$VERSION\`"
               echo "- SHA-256: \`$SHA256\`"
             fi
-            echo "- Upload: \`$UPLOAD_STATE\`"
+            echo "- Upload: \`${UPLOAD_STATE:-not-run}\`"
             echo "- Mode: \`$MODE\`"
-            echo "- Store state: \`$PUBLISH_STATE\`"
+            echo "- Store state: \`${PUBLISH_STATE:-not-queried}\`"
+            if [[ "$AUTH_OUTCOME" == "failure" ]]; then
+              echo
+              echo 'No upload or submission occurred. Check the configured Google Cloud project, workload identity pool/provider, and service-account access.'
+              echo 'Recovery instructions: https://github.com/TED-H-com/multi-ai-chat/blob/master/store/PUBLISHING-RECOVERY.md'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

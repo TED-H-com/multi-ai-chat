@@ -2,24 +2,23 @@
 
 [English](./README.md) · [繁體中文](./README.zh-TW.md) · [日本語](./README.ja.md) · [Deutsch](./README.de.md) · **한국어**
 
-[Chrome 웹 스토어에서 설치](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [공식 웹사이트](https://ted-h-com.github.io/multi-ai-chat/?lang=ko) · [v0.4.0 릴리스](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.0) · [데스크톱 버전](https://ted-h-com.github.io/multi-ai-chat-desktop/)
+[Chrome 웹 스토어에서 설치](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [공식 웹사이트](https://ted-h-com.github.io/multi-ai-chat/?lang=ko) · [v0.4.1 릴리스](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.1) · [데스크톱 버전](https://ted-h-com.github.io/multi-ai-chat-desktop/)
 
 한 번 질문하고 네 개의 AI를 함께 활용하세요. Multi-AI Chat은 로그인된 **ChatGPT, Claude, Gemini, Grok** 탭을 조율하는 가벼운 Chrome Side Panel입니다. 이미 이용 권한이 있는 provider 페이지를 그대로 사용하므로 모델 API 키나 별도의 채팅 backend가 필요하지 않습니다.
 
-**최신 릴리스: v0.4.0** · Chrome 114+ · Manifest V3 · 5개 인터페이스 언어 · MIT
+**최신 릴리스: v0.4.1** · Chrome 114+ · Manifest V3 · 5개 인터페이스 언어 · MIT
 
-**v0.4.0에는 기본적으로 꺼져 있는 실험적 Meta AI 대기 옵션이 있습니다.** 기본적으로 기존 네 제공자가 활성화됩니다. **설정 → 대기 AI**에서 기존 제공자 하나를 선택하면 Meta AI가 대신 활성화되며, 항상 네 제공자만 활성화됩니다. Meta를 활성화하면 meta.ai 접근을 요청하고, 거부하면 Meta는 대기 상태로 유지됩니다. 전송 대상과 역할이 조정되고 재시작 후에도 선택이 유지됩니다. 기존 탭과 로그인은 삭제하지 않습니다. 게스트 이용은 Meta 사이트와 지역에 따라 달라지며 비활성 입력란은 준비 완료로 표시하지 않습니다.
+**v0.4.1에는 기본적으로 꺼져 있는 실험적 Meta AI 대기 옵션이 있습니다.** 기본적으로 기존 네 제공자가 활성화됩니다. **설정 → 대기 AI**에서 기존 제공자 하나를 선택하면 Meta AI가 대신 활성화되며, 항상 네 제공자만 활성화됩니다. Meta를 활성화하면 meta.ai 접근을 요청하고, 거부하면 Meta는 대기 상태로 유지됩니다. 전송 대상과 역할이 조정되고 재시작 후에도 선택이 유지됩니다. 기존 탭과 로그인은 삭제하지 않습니다. 게스트 이용은 Meta 사이트와 지역에 따라 달라지며 비활성 입력란은 준비 완료로 표시하지 않습니다.
 
 > Multi-AI Chat은 제3자 웹 UI를 자동으로 조작합니다. Provider의 화면 변경으로 페이지 selector가 일시적으로 작동하지 않을 수 있으며 자동화 사용에는 각 서비스 약관이 적용될 수 있습니다. 사용 권한이 있는 계정과 콘텐츠만 이용하세요.
 
 ![Chrome에서 여러 provider workflow를 실행하는 Multi-AI Chat](./store/screenshot-1280x800.png)
 
-## v0.4.0 변경 사항
+## v0.4.1 변경 사항
 
-- **재시작 후 복구.** 워크플로 체크포인트가 완료한 단계와 대기 중인 복구 결정을 보존합니다. 자동 복구는 기본적으로 꺼져 있으며, 이미 전송했거나 전송 여부가 불분명한 요청을 자동으로 다시 보내지 않습니다.
-- **언어 및 사이트 호환성.** 답변 언어를 UI 언어와 분리해 처리합니다. ChatGPT 입력창 감지, Gemini 일반 텍스트 입력, Grok 로그인 요구 감지를 개선하고 기존 초안을 보호합니다.
-- **패널 및 유지보수.** 높이가 낮은 창에서도 Send／Stop을 표시하고 긴 실행 기록을 스크롤할 수 있습니다. React, Tailwind, TypeScript 및 빌드 의존성을 업데이트했습니다.
-- **검증과 한계.** 테스트 450개와 Chromium fixture 검사 131개를 통과했으며, 실제 Gemini 게스트 송수신도 확인했습니다. 로그인한 다섯 제공자의 전체 워크플로, Stop, 긴 응답은 아직 종단 간 검증하지 않았습니다. Meta AI는 실험 기능으로 기본적으로 꺼져 있습니다. [전체 릴리스 노트](./store/RELEASE-v0.4.0.md)를 참고하세요.
+- 새 대화에서도 모드와 역할을 유지하고 Coding／원탁 토론의 응답 전달, 복구 및 전체 코드 추출을 수정했습니다.
+- 제공자 입력과 응답 감지를 개선하여 초안과 이미 전송한 요청을 보호합니다. 발신자 검증, 저장 처리 최적화 및 빌드 의존성 보안 업데이트도 포함됩니다.
+- 전체 실행 기록은 5개 언어와 키보드 조작을 지원하며, 격리된 브라우저 fixture로 배포 파일을 검증합니다. 이번 빌드의 로그인한 Coding／원탁 토론은 아직 실환경 검증하지 않았습니다. Meta는 실험 기능으로 기본적으로 꺼져 있습니다. [릴리스 노트](./store/RELEASE-v0.4.1.md).
 
 ## 버전 선택
 
@@ -63,17 +62,17 @@ Chrome 웹 스토어 등록 버전은 **v0.3.0**(2026-09-23 업데이트)이며 
 
 GitHub Release ZIP은 수동 설치용 대안이며 unpacked extension으로 바로 불러올 수 있어 소스 build가 필요하지 않습니다.
 
-> v0.4.0은 GitHub에 공개되었습니다. 아래 ZIP과 checksum이 공식 릴리스 파일입니다. Chrome 웹 스토어 공개는 별도의 제출 및 심사 절차를 따릅니다.
+> v0.4.1은 GitHub에 공개되었습니다. 아래 ZIP과 checksum이 공식 릴리스 파일입니다. Chrome 웹 스토어 공개는 별도의 제출 및 심사 절차를 따릅니다.
 
-1. [`multi-ai-chat-store-v0.4.0.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip)과 [checksum 파일](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip.sha256)을 다운로드합니다.
-2. 압축 파일을 검증합니다. 올바른 SHA-256은 `a128a939f9dd14606af6b8bb6c058377236664cd6ff537db4dbe6f999a145577`입니다.
+1. [`multi-ai-chat-store-v0.4.1.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip)과 [checksum 파일](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip.sha256)을 다운로드합니다.
+2. 압축 파일을 검증합니다. 올바른 SHA-256은 `4255487cbcdd08c9028ddf3079bc5851b951ed124e10b695d8981144e5606edc`입니다.
 
    ```powershell
-   (Get-FileHash .\multi-ai-chat-store-v0.4.0.zip -Algorithm SHA256).Hash.ToLower()
+   (Get-FileHash .\multi-ai-chat-store-v0.4.1.zip -Algorithm SHA256).Hash.ToLower()
    ```
 
    ```sh
-   shasum -a 256 multi-ai-chat-store-v0.4.0.zip
+   shasum -a 256 multi-ai-chat-store-v0.4.1.zip
    ```
 
 3. ZIP을 계속 사용할 폴더에 풉니다. 그 폴더의 루트에 `manifest.json`이 있습니다.

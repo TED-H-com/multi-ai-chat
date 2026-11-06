@@ -1,8 +1,8 @@
 # Chrome Web Store: submission pack
 
-Submission material for **Multi-AI Chat v0.4.0**. Source and both manifests are 0.4.0; [GitHub Release v0.4.0](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.0) provides `multi-ai-chat-store-v0.4.0.zip` and its checksum. See the [release notes](RELEASE-v0.4.0.md) for changes, validation, and known limits.
+Submission material for **Multi-AI Chat v0.4.1**. Source and both manifests are 0.4.1; [GitHub Release v0.4.1](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.1) provides `multi-ai-chat-store-v0.4.1.zip` and its checksum. See the [release notes](RELEASE-v0.4.1.md) for changes, validation, and known limits.
 
-The public Chrome Web Store listing was verified as **v0.3.0** on 2026-10-19 (last listing update: 2026-09-23). The v0.4.0 [automatic submission workflow](https://github.com/TED-H-com/multi-ai-chat/actions/runs/39303848603) has been requested and must pass the existing `chrome-web-store` environment approval before uploading and submitting. A requested workflow is not a completed store submission or an approved store release.
+The public Chrome Web Store listing was verified as **v0.3.0** on 2026-11-06 (last listing update: 2026-09-23). The previous 0.4.0 upload and the new [status check](https://github.com/TED-H-com/multi-ai-chat/actions/runs/42181274959) both failed Google Cloud authentication before upload with `invalid_target`. Version 0.4.1 is available through GitHub; store submission requires restoring the publisher identity. See [publishing recovery](PUBLISHING-RECOVERY.md).
 
 Required permissions and optional Meta AI access are unchanged from v0.3.0. Meta AI remains experimental and off by default; authenticated Meta send and receive remains unverified. Activating Meta requests optional access, and declining leaves it on standby. Its packaged content script is registered dynamically after access is granted.
 
@@ -14,7 +14,7 @@ Copy each listing block into the matching field when editing the listing. Items 
 
 1. **Register a developer account** at https://chrome.google.com/webstore/devconsole, one-time **US$5** fee (Google account + card). New accounts may need identity verification (can take a few days), and the publishing Google account must have **2-Step Verification** enabled.
 2. **Privacy policy.** Use the public repository copy at `https://github.com/TED-H-com/multi-ai-chat/blob/master/store/PRIVACY.md` (or mirror it on the developer's own domain). A privacy-policy URL is **required** because the extension reads page content.
-3. **Upload the package** `multi-ai-chat-store-v0.4.0.zip` (see §6), or approve the existing automatic submission workflow. Avoid creating a second submission while one is pending.
+3. **Upload the package** `multi-ai-chat-store-v0.4.1.zip` (see §6), or restore publisher access and run the automatic submission workflow. Avoid creating a second submission while one is pending.
 4. **Add the screenshot and small promo tile** from `store/` (see §5).
 5. Fill the fields below, complete the **Privacy practices** tab (§4), then **Submit for review**.
 
@@ -137,17 +137,23 @@ load-unpacked extension, zip its contents:
 
 ```powershell
 # from the repo root
-Compress-Archive -Path dist\* -DestinationPath store\multi-ai-chat-store-v0.4.0.zip -Force
+Compress-Archive -Path dist\* -DestinationPath store\multi-ai-chat-store-v0.4.1.zip -Force
 ```
 
 ```sh
 # or with the zip CLI
-(cd dist && zip -r ../store/multi-ai-chat-store-v0.4.0.zip .)
+(cd dist && zip -r ../store/multi-ai-chat-store-v0.4.1.zip .)
 ```
 
-This filename is the v0.4.0 release asset. Its published SHA-256 is `a128a939f9dd14606af6b8bb6c058377236664cd6ff537db4dbe6f999a145577`, which identifies the **GitHub Release** ZIP that users download and verify.
+This filename is the v0.4.1 release asset. Its published SHA-256 is `4255487cbcdd08c9028ddf3079bc5851b951ed124e10b695d8981144e5606edc`, which identifies the **GitHub Release** ZIP that users download and verify.
 
-The Chrome Web Store workflow rebuilds and packages the same committed `dist/` files. Its ZIP hash may differ because ZIP metadata records file modification times. Compare the extracted file list and each file's SHA-256 with the GitHub package; do not substitute the workflow ZIP hash in public download instructions. The v0.4.0 GitHub package was downloaded again after upload and verified against all 14 files in `dist/`.
+The Chrome Web Store workflow and GitHub release use the same deterministic packaging script, which sorts file names and normalizes ZIP timestamps and permissions:
+
+```sh
+python3 scripts/package-extension.py
+```
+
+Repeated packaging of the same build produces the same ZIP and checksum. The script writes both files in `store/`; the workflow uses `--output` to put them in its temporary directory. The manual ZIP commands above remain usable, but their metadata may produce a different checksum. Compare extracted file contents when checking a manually created archive.
 
 Always run `npm run verify` first so `dist/` reflects the current source.
 
