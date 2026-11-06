@@ -2,24 +2,24 @@
 
 [English](./README.md) · **繁體中文** · [日本語](./README.ja.md) · [Deutsch](./README.de.md) · [한국어](./README.ko.md)
 
-[從 Chrome 線上應用程式商店安裝](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [官方網站](https://ted-h-com.github.io/multi-ai-chat/?lang=zh-TW) · [v0.4.0 Release](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.0) · [桌面版](https://ted-h-com.github.io/multi-ai-chat-desktop/?lang=zh-TW)
+[從 Chrome 線上應用程式商店安裝](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [官方網站](https://ted-h-com.github.io/multi-ai-chat/?lang=zh-TW) · [v0.4.1 Release](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.1) · [桌面版](https://ted-h-com.github.io/multi-ai-chat-desktop/?lang=zh-TW)
 
 只問一次，讓四個 AI 一起工作。Multi-AI Chat 是輕量的 Chrome Side Panel，能協調你已登入的 **ChatGPT、Claude、Gemini、Grok** 分頁。它直接使用你原本就能存取的 provider 網頁，不需要模型 API Key，也沒有額外的對話後端。
 
-**目前正式版本：v0.4.0** · Chrome 114+ · Manifest V3 · 五種介面語言 · MIT
+**目前正式版本：v0.4.1** · Chrome 114+ · Manifest V3 · 五種介面語言 · MIT
 
-**v0.4.0 包含實驗性 Meta AI 備用提供者，預設關閉。** 預設仍啟用原本四家。在「**設定 → 備用 AI**」選擇其中一家，即可讓 Meta AI 接替；同時固定啟用四家。啟用 Meta 時會要求 meta.ai 的存取權限，若拒絕則 Meta 維持備用。自由分送目標與工作流角色會同步調整，重開後保留選擇，既有分頁與登入不會被刪除。Meta 訪客使用取決於當下網站／區域，停用或 inert 的輸入框不會被判定為就緒。
+**v0.4.1 包含實驗性 Meta AI 備用提供者，預設關閉。** 預設仍啟用原本四家。在「**設定 → 備用 AI**」選擇其中一家，即可讓 Meta AI 接替；同時固定啟用四家。啟用 Meta 時會要求 meta.ai 的存取權限，若拒絕則 Meta 維持備用。自由分送目標與工作流角色會同步調整，重開後保留選擇，既有分頁與登入不會被刪除。Meta 訪客使用取決於當下網站／區域，停用或 inert 的輸入框不會被判定為就緒。
 
 > Multi-AI Chat 會自動操作第三方網頁介面。Provider 改版可能暫時使頁面 selector 失效，自動化也可能受各服務條款約束。請只使用你有權使用的帳號與內容。
 
 ![Multi-AI Chat 在 Chrome 中執行多 provider workflow](./store/screenshot-1280x800.png)
 
-## v0.4.0 更新
+## v0.4.1 更新
 
-- **重啟後復原。** 工作流檢查點保留已完成的步驟與待處理的復原選擇。自動復原預設關閉；已送出或送出狀態不明的請求不會自動重送。
-- **語言與網站相容性。** 回答語言依任務需求處理，與介面語言分開。改善 ChatGPT 輸入框辨識、Gemini 純文字輸入與 Grok 登入阻擋辨識，並保護既有草稿。
-- **介面與維護。** 短視窗仍可操作 Send／Stop，長工作流紀錄可捲動；更新 React、Tailwind、TypeScript 與建置依賴。
-- **驗證與限制。** 450 項測試、131 項 Chromium fixture 檢查通過，Gemini 訪客實際收發通過。登入後五站完整工作流、Stop 與長回覆仍未完成端到端實測；Meta AI 維持實驗性且預設關閉。詳見[完整發布說明](./store/RELEASE-v0.4.0.md)。
+- **工作流接棒。** 新對話保留模式與角色。Coding／道理辯證會辨識缺少文字的回覆，復原時保留已送出的證據，並完整傳遞程式碼與參考內容。
+- **網站相容性。** 改善 ChatGPT／Claude 回覆擷取、Gemini 送出確認、Grok 原生輸入與 Meta 程式碼展開，同時保護草稿並避免不確定的重送。
+- **安全與效能。** 限制側邊欄指令來源、避免記錄原始錯誤物件、減少對話與儲存處理負擔，並更新有漏洞的建置依賴。
+- **介面與驗證。** 完整紀錄支援五種語言與鍵盤操作，使用隔離瀏覽器測試正式 bundle。此版登入後 Coding／道理辯證仍未完成實測；Meta 維持實驗性且預設關閉。詳見[發布說明](./store/RELEASE-v0.4.1.md)。
 
 ## 選擇適合的版本
 
@@ -63,17 +63,17 @@ Chrome 線上應用程式商店上架版本是 **v0.3.0**（2026-09-23 更新）
 
 GitHub Release ZIP 是手動安裝的備援方案，可以直接當作 unpacked extension 載入，不必建置原始碼。
 
-> v0.4.0 已在 GitHub 發布，下方 ZIP 與 checksum 是正式發布檔案。Chrome 線上應用程式商店版本依獨立送審與核准流程上架。
+> v0.4.1 已在 GitHub 發布，下方 ZIP 與 checksum 是正式發布檔案。Chrome 線上應用程式商店版本依獨立送審與核准流程上架。
 
-1. 下載 [`multi-ai-chat-store-v0.4.0.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip) 與它的 [checksum 檔](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip.sha256)。
-2. 驗證壓縮檔；正確的 SHA-256 是 `a128a939f9dd14606af6b8bb6c058377236664cd6ff537db4dbe6f999a145577`。
+1. 下載 [`multi-ai-chat-store-v0.4.1.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip) 與它的 [checksum 檔](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip.sha256)。
+2. 驗證壓縮檔；正確的 SHA-256 是 `4255487cbcdd08c9028ddf3079bc5851b951ed124e10b695d8981144e5606edc`。
 
    ```powershell
-   (Get-FileHash .\multi-ai-chat-store-v0.4.0.zip -Algorithm SHA256).Hash.ToLower()
+   (Get-FileHash .\multi-ai-chat-store-v0.4.1.zip -Algorithm SHA256).Hash.ToLower()
    ```
 
    ```sh
-   shasum -a 256 multi-ai-chat-store-v0.4.0.zip
+   shasum -a 256 multi-ai-chat-store-v0.4.1.zip
    ```
 
 3. 把 ZIP 解壓縮到固定資料夾；該資料夾根目錄中會有 `manifest.json`。

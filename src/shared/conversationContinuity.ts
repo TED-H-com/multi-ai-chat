@@ -23,9 +23,12 @@ export function buildConversationReplayContext(
     .sort((left, right) => left.index - right.index)
     .map(({ message }) => ({ role: message.role, text: replayEntry(message) }));
 
-  while (entries.length > 1 && entries.map(({ text }) => text).join('\n\n').length > MAX_REPLAY_CONTEXT_LENGTH) {
+  let currentLength = entries.reduce((sum, entry) => sum + entry.text.length, 0) + Math.max(0, (entries.length - 1) * 2);
+  while (entries.length > 1 && currentLength > MAX_REPLAY_CONTEXT_LENGTH) {
     const firstAssistant = entries.findIndex(({ role }) => role === 'ai');
-    entries.splice(firstAssistant >= 0 ? firstAssistant : 0, 1);
+    const indexToRemove = firstAssistant >= 0 ? firstAssistant : 0;
+    currentLength -= entries[indexToRemove].text.length + (entries.length > 1 ? 2 : 0);
+    entries.splice(indexToRemove, 1);
   }
   return entries.length ? entries.map(({ text }) => text).join('\n\n') : undefined;
 }

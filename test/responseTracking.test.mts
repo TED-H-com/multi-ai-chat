@@ -61,6 +61,16 @@ test('a late-appended orphan response is ignored until Retry has a matching user
   );
 });
 
+test('anchored tracking excludes the user bubble and its Markdown descendants', () => {
+  const user = { position: 0 };
+  const promptMarkdown = { position: 4 | 16 };
+  const olderAssistant = { position: 2 };
+  const answer = { position: 4 };
+  const detached = { position: 1 | 4 };
+  const anchor = { compareDocumentPosition: (node: { position: number }) => node.position };
+  assert.deepEqual(responsesFollowingAnchor([olderAssistant, user, promptMarkdown, answer, detached], anchor), [answer]);
+});
+
 test('anchored Grok tracking excludes an old assistant before the confirmed Retry user turn', () => {
   interface PositionedResponse {
     order: number;

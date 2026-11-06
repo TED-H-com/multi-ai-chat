@@ -453,6 +453,22 @@ async function run(browser) {
       fs.writeFileSync(path.join(output, `${language}-modes.aria.txt`), await modeGroup().ariaSnapshot());
       await page.setViewportSize({ width: 420, height: 850 });
       passed.push('Localized mode group exposes exactly one pressed mode; Tab plus Enter/Space switches all modes and reveals focused buttons in a narrow panel');
+
+      const fullLog = () => page.getByRole('dialog', { name: label('trace.full_title'), exact: true });
+      const openLog = () => button('trace.view_full');
+      await openLog().click();
+      await fullLog().waitFor();
+      const closeLog = fullLog().getByRole('button', { name: label('app.close'), exact: true });
+      assert.equal(await focused(closeLog), true);
+      await page.keyboard.press('Tab');
+      assert.equal(await focused(closeLog), true);
+      await page.keyboard.press('Shift+Tab');
+      assert.equal(await focused(closeLog), true);
+      await fullLog().getByText(label('trace.empty'), { exact: true }).waitFor();
+      await page.keyboard.press('Escape');
+      await fullLog().waitFor({ state: 'detached' });
+      assert.equal(await focused(openLog()), true);
+      passed.push('Complete workflow log is localized, keeps keyboard focus inside, and restores focus on Escape');
       for (const name of ['debate', 'consult']) {
         await mode(name).click();
         await expectMode(name);
@@ -691,9 +707,11 @@ async function run(browser) {
         window.readinessFixture.emit({ ...response, payload: 'Verified English answer' });
         window.readinessFixture.emit({ ...response, payload: 'Duplicate overwrites the answer' });
         window.readinessFixture.emit({ ...response, action: 'RESPONSE_CHUNK', payload: 'Late streaming chunk' });
+        window.readinessFixture.emit({ ...response, provider: 'chatgpt', requestId: 'fixture-chatgpt-response', payload: 'Independent ChatGPT answer' });
         window.readinessFixture.emit({ action: 'WORKFLOW_STATUS', payload: { ...scope, key: '', done: true } });
       });
       await page.getByText('Verified English answer', { exact: true }).waitFor();
+      await page.getByText('Independent ChatGPT answer', { exact: true }).waitFor();
       assert.equal(await page.getByText('Untrusted provider injection', { exact: true }).count(), 0);
       assert.equal(await page.getByText('Duplicate overwrites the answer', { exact: true }).count(), 0);
       assert.equal(await page.getByText('Late streaming chunk', { exact: true }).count(), 0);
@@ -717,6 +735,14 @@ async function run(browser) {
       await page.getByText('⚠️ Error: Simulated workflow refusal', { exact: true }).waitFor();
       assert.equal(await page.locator('textarea').isEnabled(), true);
       passed.push('An explicit negative workflow acknowledgement displays the failure and releases the input');
+
+      for (const name of ['coding', 'roundtable']) {
+        await mode(name).click();
+        await button('app.new').click();
+        await expectMode(name);
+      }
+      await mode('free').click();
+      passed.push('New chat preserves Coding and Roundtable selections instead of resetting to Free');
 
       // Persist a recovery before recreating the whole side-panel document. The
       // GET_CONNECTIONS replay is emitted immediately by the Chrome double, so

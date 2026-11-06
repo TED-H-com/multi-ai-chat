@@ -18,6 +18,58 @@ export const META_SEND_SELECTORS = ['[data-testid="composer-send-button"]', 'but
 export const META_STOP_SELECTORS = ['[data-testid="composer-stop-button"]', 'button[aria-label="Stop"]'];
 export const META_RESPONSE_SELECTORS = ['[data-message-item]:not([data-user-message])', '[data-testid="assistant-message"]'];
 
+export function metaResponseContentRoot(response: Element): Element | Element[] {
+  if (response.matches?.('.ur-markdown, pre')) return response;
+  // Meta renders prose and code in separate sibling fragments. Keep all answer
+  // fragments in DOM order, without the surrounding thinking/copy/fold controls.
+  const fragments = Array.from(response.querySelectorAll?.('.ur-markdown, pre') ?? []);
+  const roots: Element[] = [];
+  for (const fragment of fragments) {
+    // Expanded code retains a hidden five-line preview beside the full PRE.
+    if (fragment.closest?.('.hidden, [hidden], [aria-hidden="true"]')) continue;
+    if (!roots[roots.length - 1]?.contains(fragment)) roots.push(fragment);
+  }
+  return roots.length ? roots : response;
+}
+
+export function isMetaResponseStreaming(response?: Element): boolean {
+  if (!response) return false;
+  const body = response.getAttribute?.('data-streaming-state')
+    ? response : response.querySelector?.('[data-streaming-state]');
+  const state = body?.getAttribute('data-streaming-state');
+  return Boolean(state && state !== 'DONE');
+}
+
+export function isMetaResponseCandidate(response: Element): boolean {
+  if (isMetaResponseStreaming(response)) return false;
+  const hasAnswer = Boolean(response.querySelector?.('.ur-markdown, pre'));
+  if (response.getAttribute?.('data-message-role') === 'assistant'
+    || response.getAttribute?.('data-testid') === 'assistant-message'
+    || response.querySelector?.('[data-testid="assistant-message"]')) return hasAnswer;
+  // The current outer turn mounts its thinking status before the answer. Do not
+  // mistake its invisible orbit logo/canvas for generated media either.
+  return !response.querySelector?.('[data-testid="thinking-status"], img[src*="/images/cot_logo_static/"]')
+    || hasAnswer;
+}
+
+const expandedMetaCodeControls = new WeakSet<Element>();
+
+export function prepareMetaResponse(response: Element): boolean {
+  const controls = Array.from(response.querySelectorAll<HTMLButtonElement>('button[aria-label]'))
+    .filter((button) => /^See all \d+ lines$/i.test(button.getAttribute('aria-label') ?? '')
+      && button.getAttribute('aria-expanded') !== 'true');
+  for (const button of controls) {
+    // Only expand the answer's code preview. Never activate Copy, Download,
+    // Retry, Send, or a control outside this response. Wait for React to mount
+    // the remaining lines before allowing any text into the workflow.
+    if (!button.disabled && !expandedMetaCodeControls.has(button)) {
+      expandedMetaCodeControls.add(button);
+      button.click();
+    }
+  }
+  return controls.length === 0;
+}
+
 const META_COMPOSER_CONTAINER = '[data-testid*="composer"], [class*="composer"], [class*="input-area"], form, fieldset';
 
 interface MetaControl {

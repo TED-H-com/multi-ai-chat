@@ -2,24 +2,24 @@
 
 **English** · [繁體中文](./README.zh-TW.md) · [日本語](./README.ja.md) · [Deutsch](./README.de.md) · [한국어](./README.ko.md)
 
-[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [Official website](https://ted-h-com.github.io/multi-ai-chat/) · [v0.4.0 release](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.0) · [Desktop edition](https://ted-h-com.github.io/multi-ai-chat-desktop/)
+[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/multi-ai-chat/nomhpmmhkmolkmpkjfeainjoifkipdah) · [Official website](https://ted-h-com.github.io/multi-ai-chat/) · [v0.4.1 release](https://github.com/TED-H-com/multi-ai-chat/releases/tag/v0.4.1) · [Desktop edition](https://ted-h-com.github.io/multi-ai-chat-desktop/)
 
 Ask once and put four AIs to work. Multi-AI Chat is a lightweight Chrome Side Panel that coordinates your signed-in **ChatGPT, Claude, Gemini, and Grok** tabs. It uses the provider pages you already have access to. There are no model API keys and no separate chat backend.
 
-**Current release: v0.4.0** · Chrome 114+ · Manifest V3 · Five interface languages · MIT
+**Current release: v0.4.1** · Chrome 114+ · Manifest V3 · Five interface languages · MIT
 
-**v0.4.0 includes experimental Meta AI as a standby provider that stays off by default.** The original four remain active by default. In **Settings → Standby provider**, choose one of them to activate Meta AI in its place; exactly four providers stay active. Activating Meta asks for access to meta.ai, and declining keeps Meta on standby. Targets and workflow roles follow the selection, which persists across restarts. Existing tabs and sign-ins are preserved. Meta guest access depends on the current site/region, and an inert or disabled composer is not treated as ready.
+**v0.4.1 includes experimental Meta AI as a standby provider that stays off by default.** The original four remain active by default. In **Settings → Standby provider**, choose one of them to activate Meta AI in its place; exactly four providers stay active. Activating Meta asks for access to meta.ai, and declining keeps Meta on standby. Targets and workflow roles follow the selection, which persists across restarts. Existing tabs and sign-ins are preserved. Meta guest access depends on the current site/region, and an inert or disabled composer is not treated as ready.
 
 > Multi-AI Chat automates third-party web interfaces. A provider redesign can temporarily break page selectors, and automated use may be governed by each provider's terms. Use only accounts and content you are authorized to use.
 
 ![Multi-AI Chat running a multi-provider workflow in Chrome](./store/screenshot-1280x800.png)
 
-## What changed in v0.4.0
+## What changed in v0.4.1
 
-- **Recovery across restarts.** Workflow checkpoints preserve completed turns and pending recovery decisions. Optional automatic recovery stays off by default; accepted or uncertain sends are never automatically repeated.
-- **Language and provider compatibility.** Answer language follows the task independently of the interface language. ChatGPT composer detection, Gemini plain-text insertion, and Grok sign-in detection are improved without overwriting an existing draft.
-- **Panel and maintenance.** Send and Stop stay visible in short windows, long workflow traces remain scrollable, and React, Tailwind, TypeScript, and build dependencies are updated.
-- **Validation and limits.** 450 tests and 131 Chromium fixture checks passed; real Gemini guest send and receive passed. Authenticated five-provider workflows, Stop, and long responses remain unverified end to end. Meta AI remains experimental and off by default. See the [full release notes](./store/RELEASE-v0.4.0.md).
+- **Workflow handoffs.** New chat preserves the selected mode and roles. Coding and Roundtable reject missing text, retain accepted-send evidence across recovery, and preserve complete code and reference handoffs.
+- **Provider compatibility.** Improve ChatGPT and Claude response extraction, Gemini send acknowledgement, Grok native editing, and Meta code expansion while protecting existing drafts and avoiding ambiguous resends.
+- **Security and performance.** Restrict panel commands to trusted contexts, avoid raw error-object logging, reduce conversation/storage overhead, and update vulnerable build dependencies.
+- **Panel and verification.** Localize the complete workflow log in five languages, support keyboard navigation, and verify production bundles with isolated browser fixtures. Fresh authenticated Coding/Roundtable completion remains unverified; Meta stays experimental and off by default. See the [release notes](./store/RELEASE-v0.4.1.md).
 
 ## Choose your edition
 
@@ -55,7 +55,7 @@ The interface language is separate from the requested answer language. Workflow 
 
 Grok submission requires a matching new user message on the provider page. If acceptance cannot be confirmed, check that conversation before choosing Retry: an uncertain send may already have reached the provider. The extension does not automatically repeat an uncertain send, overwrite a different existing draft, or bypass provider usage limits.
 
-Gemini uses the editor's plain-text paste handler and verifies the full prompt, including line breaks and significant whitespace, before one Send activation. A different draft, editor rollback, disabled Send, or uncertain acceptance stops the turn for recovery. It does not patch editor-owned DOM or repeat an ambiguous send.
+Gemini uses the editor's native text insertion and verifies the full prompt, including line breaks and significant whitespace, before one Send activation. A different draft, editor rollback, disabled Send, or uncertain acceptance stops the turn for recovery. It does not patch editor-owned DOM or repeat an ambiguous send.
 
 ## Install
 
@@ -69,17 +69,17 @@ The Chrome Web Store listing is **v0.3.0** (updated 2026-09-23) and includes exp
 
 The GitHub Release ZIP is a manual backup that can be loaded as an unpacked extension; no source build is required.
 
-> v0.4.0 is available on GitHub. The ZIP and checksum below are its official release files. Chrome Web Store availability follows its separate submission and review process.
+> v0.4.1 is available on GitHub. The ZIP and checksum below are its official release files. Chrome Web Store availability follows its separate submission and review process.
 
-1. Download [`multi-ai-chat-store-v0.4.0.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip) and its [checksum file](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.0/multi-ai-chat-store-v0.4.0.zip.sha256).
-2. Verify the archive. The expected SHA-256 is `a128a939f9dd14606af6b8bb6c058377236664cd6ff537db4dbe6f999a145577`.
+1. Download [`multi-ai-chat-store-v0.4.1.zip`](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip) and its [checksum file](https://github.com/TED-H-com/multi-ai-chat/releases/download/v0.4.1/multi-ai-chat-store-v0.4.1.zip.sha256).
+2. Verify the archive. The expected SHA-256 is `4255487cbcdd08c9028ddf3079bc5851b951ed124e10b695d8981144e5606edc`.
 
    ```powershell
-   (Get-FileHash .\multi-ai-chat-store-v0.4.0.zip -Algorithm SHA256).Hash.ToLower()
+   (Get-FileHash .\multi-ai-chat-store-v0.4.1.zip -Algorithm SHA256).Hash.ToLower()
    ```
 
    ```sh
-   shasum -a 256 multi-ai-chat-store-v0.4.0.zip
+   shasum -a 256 multi-ai-chat-store-v0.4.1.zip
    ```
 
 3. Extract the ZIP to a permanent folder. Its root contains `manifest.json`.

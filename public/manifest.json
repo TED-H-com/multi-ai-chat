@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Multi-AI Chat",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Run reliable multi-AI workflows across ChatGPT, Claude, Gemini, and Grok from one side panel.",
   "minimum_chrome_version": "114",
   "permissions": ["sidePanel", "tabs", "storage", "scripting"],

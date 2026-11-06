@@ -22,6 +22,12 @@ function detectLocale(): Locale {
 let currentLocale: Locale = detectLocale();
 
 const en: Record<string, string> = {
+  "trace.view_full": "View full workflow log",
+  "trace.full_title": "Complete workflow history",
+  "trace.events": "All workflow events",
+  "trace.empty": "No workflow events yet.",
+  "trace.recovery_hint": "Close this log to access Retry, Skip, or Cancel.",
+  "trace.scroll_hint": "Scroll to read the entire history.",
   'settings.token_loading': 'Loading saved token…',
   'settings.token_load_failed': 'Could not load the saved token. Try again.',
   'settings.save_failed': 'Could not save settings. Your draft is still here; try again.',
@@ -201,6 +207,12 @@ const en: Record<string, string> = {
 };
 
 const zh: Record<string, string> = {
+  "trace.view_full": "查看完整執行紀錄",
+  "trace.full_title": "完整執行紀錄",
+  "trace.events": "所有工作流事件",
+  "trace.empty": "尚無工作流事件。",
+  "trace.recovery_hint": "關閉紀錄後即可重試、略過或取消。",
+  "trace.scroll_hint": "捲動以閱讀完整紀錄。",
   ...en,
   'settings.recovery': '自動復原',
   'settings.recovery.help': '只使用有界且以證據為基礎的復原。提交狀態不確定的訊息絕不會自動重送。',
@@ -276,6 +288,12 @@ const zh: Record<string, string> = {
 };
 
 const ja: Record<string, string> = {
+  "trace.view_full": "実行ログをすべて表示",
+  "trace.full_title": "完全な実行履歴",
+  "trace.events": "すべての実行イベント",
+  "trace.empty": "実行イベントはまだありません。",
+  "trace.recovery_hint": "ログを閉じると再試行、スキップ、中止を選べます。",
+  "trace.scroll_hint": "スクロールして履歴全体を確認できます。",
   ...en,
   'settings.recovery': '自動復旧',
   'settings.recovery.help': '根拠が確認できる範囲で、回数を制限して復旧します。送信が不確かなメッセージは自動で再送しません。',
@@ -347,6 +365,12 @@ const ja: Record<string, string> = {
 };
 
 const de: Record<string, string> = {
+  "trace.view_full": "Vollständiges Ablaufprotokoll anzeigen",
+  "trace.full_title": "Vollständiger Ablaufverlauf",
+  "trace.events": "Alle Workflow-Ereignisse",
+  "trace.empty": "Noch keine Workflow-Ereignisse.",
+  "trace.recovery_hint": "Schließe das Protokoll, um erneut zu versuchen, zu überspringen oder abzubrechen.",
+  "trace.scroll_hint": "Scrolle, um den gesamten Verlauf zu lesen.",
   ...en,
   'settings.recovery': 'Automatische Wiederherstellung',
   'settings.recovery.help': 'Verwendet nur begrenzte, belegbare Wiederherstellung. Nachrichten mit unklarem Sendestatus werden nie automatisch erneut gesendet.',
@@ -418,6 +442,12 @@ const de: Record<string, string> = {
 };
 
 const ko: Record<string, string> = {
+  "trace.view_full": "전체 실행 기록 보기",
+  "trace.full_title": "전체 실행 기록",
+  "trace.events": "모든 워크플로 이벤트",
+  "trace.empty": "아직 워크플로 이벤트가 없습니다.",
+  "trace.recovery_hint": "기록을 닫으면 재시도, 건너뛰기 또는 취소할 수 있습니다.",
+  "trace.scroll_hint": "스크롤하여 전체 기록을 확인하세요.",
   ...en,
   'settings.recovery': '자동 복구',
   'settings.recovery.help': '근거가 확인된 제한적 복구만 사용합니다. 전송 여부가 불확실한 메시지는 자동으로 다시 보내지 않습니다.',

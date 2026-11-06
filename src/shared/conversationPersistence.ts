@@ -25,6 +25,33 @@ export interface ConversationPersister {
   peek(): ConversationPersistPayload | null;
 }
 
+export function prepareNewConversation(
+  conversations: Conversation[],
+  mode: ChatMode,
+  roles: ModeRoles,
+  untitled: string,
+  createId: () => string = () => crypto.randomUUID(),
+  now = Date.now(),
+): { conversation: Conversation; conversations: Conversation[] } {
+  const reusable = conversations.find(candidate => !candidate.messages?.length);
+  const conversation: Conversation = {
+    id: reusable?.id ?? createId(),
+    title: untitled,
+    mode,
+    roles: mode === 'free' ? undefined : { ...roles },
+    messages: [],
+    providerUrls: {},
+    createdAt: reusable?.createdAt ?? now,
+    updatedAt: now,
+  };
+  return {
+    conversation,
+    conversations: reusable
+      ? conversations.map(candidate => candidate.id === conversation.id ? conversation : candidate)
+      : [conversation, ...conversations].slice(0, MAX_CONVERSATIONS),
+  };
+}
+
 export function storageReadFailed(lastError: { message?: string } | undefined | null): boolean {
   return Boolean(lastError?.message);
 }
@@ -115,14 +142,24 @@ export function payloadFromInputs(
 
 export function fitConversationsForStorage(conversations: Conversation[]): Conversation[] {
   const persisted = [...conversations];
-  const size = () => new TextEncoder().encode(JSON.stringify(persisted)).byteLength;
-  while (persisted.length > 1 && size() > MAX_CONVERSATION_STORAGE_BYTES) persisted.pop();
-  if (persisted.length === 1 && size() > MAX_CONVERSATION_STORAGE_BYTES) {
-    const conversation = { ...persisted[0], messages: [...persisted[0].messages] };
-    while (conversation.messages.length > 2 && new TextEncoder().encode(JSON.stringify(conversation)).byteLength > MAX_CONVERSATION_STORAGE_BYTES) {
-      conversation.messages.shift();
+  const encoder = new TextEncoder();
+
+  let currentSize = encoder.encode(JSON.stringify(persisted)).byteLength;
+  while (persisted.length > 1 && currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
+    const removed = persisted.pop();
+    currentSize -= encoder.encode(JSON.stringify(removed)).byteLength + 1; // +1 for the comma (approximate)
+  }
+
+  if (persisted.length === 1) {
+    currentSize = encoder.encode(JSON.stringify(persisted)).byteLength;
+    if (currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
+      const conversation = { ...persisted[0], messages: [...persisted[0].messages] };
+      while (conversation.messages.length > 2 && currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
+        const removed = conversation.messages.shift();
+        currentSize -= encoder.encode(JSON.stringify(removed)).byteLength + 1;
+      }
+      persisted[0] = conversation;
     }
-    persisted[0] = conversation;
   }
   return persisted;
 }

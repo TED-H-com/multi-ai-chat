@@ -12,7 +12,7 @@ const scenarios = [
   { name: 'significant whitespace draft', draft: prompt.replace('a  b', 'a b'), error: 'error.existing_draft' },
   { name: 'whitespace-only draft preserved', draft: ' \n\t', error: 'error.input_injection_failed' },
   { name: 'rejected native edit', ignored: true, error: 'error.input_injection_failed' },
-  { name: 'editor rollback before insertion settles', rollback: 'before-settlement', error: 'error.input_injection_failed' },
+  { name: 'editor rollback before insertion settles', rollback: 'before-settlement', error: 'error.existing_draft' },
   { name: 'editor rollback after accepted activation', rollback: 'after-activation', success: true },
   { name: 'disabled send', disabled: true, error: 'error.send_action_disabled' },
   { name: 'remounted composer after activation', remount: true, error: 'error.send_unconfirmed' },
@@ -113,7 +113,8 @@ function installFixture(options) {
           await page.evaluate(() => window.fixture.stop());
         }
         const ack = await sendPromise;
-        if (!scenario.cancel) await page.waitForFunction(() => window.fixture.messages.some(message => message.action === 'RESPONSE_DONE'), undefined, { timeout: 18000 });
+        // The adapter allows 30 seconds for background-tab acknowledgement.
+        if (!scenario.cancel) await page.waitForFunction(() => window.fixture.messages.some(message => message.action === 'RESPONSE_DONE'), undefined, { timeout: 40000 });
         else await page.waitForTimeout(350);
         const state = await page.evaluate(() => ({
           ...window.fixture, messages: window.fixture.messages.filter(message => message.action === 'RESPONSE_DONE'),
@@ -139,7 +140,7 @@ function installFixture(options) {
         } else if (scenario.cancel) {
           assert.equal(state.clicks, 0); assert.equal(state.messages.length, 0);
         } else {
-          assert.match(state.messages[0].payload, new RegExp(scenario.error));
+          assert.match(state.messages[0].payload, new RegExp(scenario.error), scenario.name);
           if (scenario.draft) {
             assert.equal(state.draft, scenario.draft); assert.equal(state.clicks, 0); assert.equal(state.edits.length, 0);
           } else if (scenario.ignored) {
