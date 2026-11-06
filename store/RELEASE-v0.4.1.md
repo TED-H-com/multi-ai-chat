@@ -23,6 +23,8 @@ compatibility, message validation, and conversation performance.
   concrete checks in the production-bundle browser fixture suite.
 - Update webpack, PostCSS, Chrome types, fast-uri and vulnerable transitive build
   dependencies. The locked dependency audit reports zero vulnerabilities.
+- Remove incomplete regex escaping from a test fixture flagged by CodeQL; use
+  literal text matching for the provider, topic and previous answer.
 - Use deterministic ZIP packaging for GitHub and Chrome Web Store. Failed store
   workflows now report authentication/upload status and link recovery steps.
 

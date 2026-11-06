@@ -1339,11 +1339,11 @@ test('Debate honors the explicit Meta → Grok → Gemini → ChatGPT map and sc
     await waitUntil(() => app.sent.length === index + 1, `mapped Debate seat ${index + 1}`);
     const request = app.sent[index];
     assert.equal(request.provider, provider);
-    assert.match(request.payload.text, new RegExp(`You are ${AI_PROVIDERS[provider as AIProvider].name}, the single`));
+    assert.ok(request.payload.text.includes(`You are ${AI_PROVIDERS[provider as AIProvider].name}, the single`));
     assert.match(request.payload.text, /Return only your own contribution for this turn\./);
     assert.match(request.payload.text, /Do not simulate, invent, attribute, or prewrite contributions/);
-    assert.match(request.payload.text, new RegExp(topic.replace(/[?]/g, '\\?')));
-    if (index > 0) assert.match(request.payload.text, new RegExp(answers[index - 1]));
+    assert.ok(request.payload.text.includes(topic));
+    if (index > 0) assert.ok(request.payload.text.includes(answers[index - 1]));
     app.complete(request, answers[index]);
   }
   assert.equal((await running).ok, true);
