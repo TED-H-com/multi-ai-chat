@@ -1007,9 +1007,16 @@ function upsertStreamingMessage(
   pendingRolesRef: React.MutableRefObject<Record<string, string>>,
   setPendingRoles: React.Dispatch<React.SetStateAction<Record<string, string>>>,
 ): ChatMessage[] {
-  if (requestId && messages.some(message => message.requestId === requestId && !message.id.endsWith('-streaming'))) return messages;
-  const existing = messages.find((message) => message.requestId === requestId && message.id.endsWith('-streaming'));
-  if (existing) return messages.map((message) => message.id === existing.id ? { ...message, content } : message);
+  if (requestId) {
+    const existingIndex = messages.findIndex((message) => message.requestId === requestId);
+    if (existingIndex !== -1) {
+      const existing = messages[existingIndex];
+      if (!existing.id.endsWith('-streaming')) return messages;
+      const copy = [...messages];
+      copy[existingIndex] = { ...existing, content };
+      return copy;
+    }
+  }
   const modeRole = consumePendingRole(provider, requestId, pendingRolesRef, setPendingRoles);
   return [...messages, { id: `${requestId ?? crypto.randomUUID()}-streaming`, role: 'ai', provider, modeRole, content, timestamp: Date.now(), requestId }];
 }
@@ -1022,9 +1029,16 @@ function finalizeMessage(
   pendingRolesRef: React.MutableRefObject<Record<string, string>>,
   setPendingRoles: React.Dispatch<React.SetStateAction<Record<string, string>>>,
 ): ChatMessage[] {
-  if (requestId && messages.some(message => message.requestId === requestId && !message.id.endsWith('-streaming'))) return messages;
-  const existing = messages.find((message) => message.requestId === requestId && message.id.endsWith('-streaming'));
-  if (existing) return messages.map((message) => message.id === existing.id ? { ...message, id: message.id.replace(/-streaming$/, ''), content } : message);
+  if (requestId) {
+    const existingIndex = messages.findIndex((message) => message.requestId === requestId);
+    if (existingIndex !== -1) {
+      const existing = messages[existingIndex];
+      if (!existing.id.endsWith('-streaming')) return messages;
+      const copy = [...messages];
+      copy[existingIndex] = { ...existing, id: existing.id.replace(/-streaming$/, ''), content };
+      return copy;
+    }
+  }
   const modeRole = consumePendingRole(provider, requestId, pendingRolesRef, setPendingRoles);
   return [...messages, { id: requestId ?? crypto.randomUUID(), role: 'ai', provider, modeRole, content, timestamp: Date.now(), requestId }];
 }

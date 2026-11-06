@@ -3,17 +3,18 @@
   "version": "0.4.0",
   "description": "Chrome Side Panel for reliable multi-AI workflows across ChatGPT, Claude, Gemini, and Grok",
   "private": true,
+  "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
     "dev": "webpack --watch --mode development",
-    "assets:promo": "node scripts/generate-promo-tile.js",
-    "assets:screenshot": "node scripts/generate-store-screenshot.js",
+    "assets:promo": "node scripts/generate-promo-tile.cjs",
+    "assets:screenshot": "node scripts/generate-store-screenshot.cjs",
     "assets:store": "npm run assets:promo && npm run assets:screenshot",
     "build": "webpack --mode production",
-    "check:version": "node scripts/check-version.js",
+    "check:version": "node scripts/check-version.cjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.mts\"",
     "verify": "npm run typecheck && npm run build && npm run test && npm run check:version",
