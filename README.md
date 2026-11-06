@@ -141,12 +141,12 @@ npm run verify
 npm audit
 ```
 
-Key modules:
+### Core Modules
 
-- `src/background/service-worker.ts`: workflow orchestration, request isolation, cancellation, and tab recovery
-- `src/content/base.ts`: verified input, send, and response engine
-- `src/content/*.ts`: provider-specific selectors and editor strategies
-- `src/sidepanel/`: React interface, local sessions, Markdown, themes, and localization
+- `src/background/`: Contains the service worker (`service-worker.ts`) and scripts for workflow orchestration, request isolation, cancellation, tab recovery, and messaging.
+- `src/content/`: Injected into provider pages. `base.ts` handles the verified input, send, and response engine. `*.ts` files contain provider-specific selectors and editor strategies.
+- `src/sidepanel/`: The React-based Chrome Side Panel interface, managing local sessions, Markdown rendering, themes, and localization.
+- `src/shared/`: Shared types, constants, and utilities (such as autonomous recovery, error definitions, and i18n) used across the background, content, and sidepanel scripts.
 
 Please run `npm run verify` before opening a pull request. For a provider-page breakage, [open an issue](https://github.com/TED-H-com/multi-ai-chat/issues) with the provider and browser version, but remove prompts, responses, account details, and tokens from screenshots or logs.
 
