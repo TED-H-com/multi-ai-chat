@@ -172,8 +172,12 @@ If the item has a policy warning or is taken down, the workflow permits only
 `status-only` and `upload-only`, so a remediation package can be uploaded without
 accidentally submitting it.
 
-The workflow verifies the source, checks that the committed `dist/` build is current,
-and uses short-lived Google Cloud credentials through Workload Identity Federation.
+The workflow checks authentication and publisher access before installing or
+building, verifies the source and committed `dist/`, then refreshes its short-lived
+Google Cloud credentials through Workload Identity Federation before upload.
+It rechecks store status before uploading and reports successful submission only
+when the API returns a recognized accepted state. See
+[publishing recovery](PUBLISHING-RECOVERY.md) for failed or unconfirmed requests.
 The `chrome-web-store` GitHub Environment must define these variables:
 
 | Variable | Value |

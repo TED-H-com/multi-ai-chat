@@ -71,13 +71,11 @@ jobs:
           fi
 
       - name: Check out repository
-        if: inputs.publish_mode != 'status-only'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        if: inputs.publish_mode != 'status-only'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.18.0
@@ -100,6 +98,28 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "archive=$RUNNER_TEMP/multi-ai-chat-store-v${version}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Check Google Cloud authentication
+        id: preflight_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          access_token_lifetime: 900s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Check publisher access and upload eligibility
+        id: preflight
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.preflight_auth.outputs.access_token }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+          PUBLISH_MODE: ${{ inputs.publish_mode }}
+        run: bash scripts/chrome-web-store.sh --preflight
 
       - name: Install dependencies
         if: inputs.publish_mode != 'status-only'
@@ -152,7 +172,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Authenticate to Google Cloud
+      - name: Refresh Google Cloud authentication before upload
+        if: inputs.publish_mode != 'status-only'
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -166,6 +187,7 @@ jobs:
           export_environment_variables: false
 
       - name: Upload to Chrome Web Store
+        if: inputs.publish_mode != 'status-only'
         id: cws
         shell: bash
         env:
@@ -173,138 +195,18 @@ jobs:
           ARCHIVE: ${{ steps.package.outputs.archive }}
           EXPECTED_VERSION: ${{ steps.package.outputs.version }}
           PUBLISH_MODE: ${{ inputs.publish_mode }}
-        run: |
-          set -euo pipefail
-
-          item="publishers/${CWS_PUBLISHER_ID}/items/${CWS_EXTENSION_ID}"
-          api="https://chromewebstore.googleapis.com"
-          auth_header="Authorization: Bearer ${ACCESS_TOKEN}"
-
-          status_response="$(curl --fail-with-body --silent --show-error \
-            --retry 3 \
-            --retry-all-errors \
-            --header "$auth_header" \
-            "$api/v2/$item:fetchStatus")"
-          printf '%s\n' "$status_response" | jq 'del(.publicKey)'
-
-          current_state="$(jq -r \
-            '.submittedItemRevisionStatus.state // .publishedItemRevisionStatus.state // "unknown"' \
-            <<<"$status_response")"
-
-          if [[ "$PUBLISH_MODE" == "status-only" ]]; then
-            echo "upload_state=not-run" >> "$GITHUB_OUTPUT"
-            echo "publish_state=$current_state" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          taken_down="$(jq -r '.takenDown // false' <<<"$status_response")"
-          warned="$(jq -r '.warned // false' <<<"$status_response")"
-          if [[ "$PUBLISH_MODE" != "upload-only" && ( "$taken_down" == "true" || "$warned" == "true" ) ]]; then
-            echo 'The item is taken down or has a policy warning. Use upload-only for a remediation package.' >&2
-            exit 1
-          fi
-
-          submitted_state="$(jq -r '.submittedItemRevisionStatus.state // empty' <<<"$status_response")"
-          if [[ "$submitted_state" == "PENDING_REVIEW" || "$submitted_state" == "STAGED" ]]; then
-            echo "An existing submission is $submitted_state; refusing to replace it." >&2
-            exit 1
-          fi
-
-          mapfile -t current_versions < <(jq -r '
-            [
-              .publishedItemRevisionStatus.distributionChannels[]?.crxVersion,
-              .submittedItemRevisionStatus.distributionChannels[]?.crxVersion
-            ] | unique[]
-          ' <<<"$status_response")
-          for current_version in "${current_versions[@]}"; do
-            if ! node - "$EXPECTED_VERSION" "$current_version" <<'NODE'
-          const [nextVersion, currentVersion] = process.argv.slice(2);
-          const normalize = (version) => version.split('.').map(Number).concat([0, 0, 0, 0]).slice(0, 4);
-          const next = normalize(nextVersion);
-          const current = normalize(currentVersion);
-          const comparison = next.findIndex((part, index) => part !== current[index]);
-          process.exit(comparison >= 0 && next[comparison] > current[comparison] ? 0 : 1);
-          NODE
-            then
-              echo "Version $EXPECTED_VERSION must be newer than existing version $current_version." >&2
-              exit 1
-            fi
-          done
-
-          upload_response="$(curl --fail-with-body --silent --show-error \
-            --request POST \
-            --header "$auth_header" \
-            --header 'Content-Type: application/zip' \
-            --data-binary "@$ARCHIVE" \
-            "$api/upload/v2/$item:upload")"
-          printf '%s\n' "$upload_response" | jq .
-
-          upload_state="$(jq -r '.uploadState // empty' <<<"$upload_response")"
-          uploaded_version="$(jq -r '.crxVersion // empty' <<<"$upload_response")"
-          if [[ -n "$uploaded_version" && "$uploaded_version" != "$EXPECTED_VERSION" ]]; then
-            echo "Chrome Web Store reported version $uploaded_version; expected $EXPECTED_VERSION." >&2
-            exit 1
-          fi
-          for attempt in {1..30}; do
-            case "$upload_state" in
-              SUCCEEDED|FAILED)
-                break
-                ;;
-              IN_PROGRESS|UPLOAD_STATE_UNSPECIFIED|NOT_FOUND|'')
-                sleep 10
-                status_response="$(curl --fail-with-body --silent --show-error \
-                  --retry 3 \
-                  --retry-all-errors \
-                  --header "$auth_header" \
-                  "$api/v2/$item:fetchStatus")"
-                upload_state="$(jq -r '.lastAsyncUploadState // empty' <<<"$status_response")"
-                echo "Upload status ($attempt/30): ${upload_state:-not-reported}"
-                ;;
-              *)
-                echo "Chrome Web Store returned an unknown upload state: $upload_state" >&2
-                exit 1
-                ;;
-            esac
-          done
-
-          if [[ "$upload_state" != "SUCCEEDED" ]]; then
-            echo "Chrome Web Store upload did not succeed (state: ${upload_state:-missing})." >&2
-            exit 1
-          fi
-
-          echo "upload_state=$upload_state" >> "$GITHUB_OUTPUT"
-
-          if [[ "$PUBLISH_MODE" == "upload-only" ]]; then
-            echo "publish_state=not-submitted" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          case "$PUBLISH_MODE" in
-            staged) publish_type="STAGED_PUBLISH" ;;
-            automatic) publish_type="DEFAULT_PUBLISH" ;;
-            *)
-              echo "Unsupported publish mode: $PUBLISH_MODE" >&2
-              exit 1
-              ;;
-          esac
-
-          publish_response="$(curl --fail-with-body --silent --show-error \
-            --request POST \
-            --header "$auth_header" \
-            --header 'Content-Type: application/json' \
-            --data "{\"publishType\":\"$publish_type\",\"blockOnWarnings\":true}" \
-            "$api/v2/$item:publish")"
-          printf '%s\n' "$publish_response" | jq .
-          echo "publish_state=$(jq -r '.state // "unknown"' <<<"$publish_response")" >> "$GITHUB_OUTPUT"
+        run: bash scripts/chrome-web-store.sh
 
       - name: Summarize result
         if: always()
         shell: bash
         env:
           JOB_STATUS: ${{ job.status }}
+          PREFLIGHT_AUTH_OUTCOME: ${{ steps.preflight_auth.outcome }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
           AUTH_OUTCOME: ${{ steps.auth.outcome }}
           MODE: ${{ inputs.publish_mode }}
-          PUBLISH_STATE: ${{ steps.cws.outputs.publish_state }}
+          PUBLISH_STATE: ${{ steps.cws.outputs.publish_state || steps.preflight.outputs.publish_state }}
           SHA256: ${{ steps.bundle.outputs.sha256 }}
           UPLOAD_STATE: ${{ steps.cws.outputs.upload_state }}
           VERSION: ${{ steps.package.outputs.version }}
@@ -313,7 +215,9 @@ jobs:
             echo '## Chrome Web Store result'
             echo
             echo "- Workflow result: \`$JOB_STATUS\`"
-            echo "- Google authentication: \`$AUTH_OUTCOME\`"
+            echo "- Google authentication preflight: \`$PREFLIGHT_AUTH_OUTCOME\`"
+            echo "- Publisher access and eligibility: \`$PREFLIGHT_OUTCOME\`"
+            echo "- Authentication before upload: \`$AUTH_OUTCOME\`"
             if [[ -n "$VERSION" ]]; then
               echo "- Version: \`$VERSION\`"
               echo "- SHA-256: \`$SHA256\`"
@@ -321,7 +225,7 @@ jobs:
             echo "- Upload: \`${UPLOAD_STATE:-not-run}\`"
             echo "- Mode: \`$MODE\`"
             echo "- Store state: \`${PUBLISH_STATE:-not-queried}\`"
-            if [[ "$AUTH_OUTCOME" == "failure" ]]; then
+            if [[ "$PREFLIGHT_AUTH_OUTCOME" == "failure" || "$AUTH_OUTCOME" == "failure" ]]; then
               echo
               echo 'No upload or submission occurred. Check the configured Google Cloud project, workload identity pool/provider, and service-account access.'
               echo 'Recovery instructions: https://github.com/TED-H-com/multi-ai-chat/blob/master/store/PUBLISHING-RECOVERY.md'
