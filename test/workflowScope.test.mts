@@ -123,6 +123,7 @@ test('Integration & Edge Case: WorkflowLifecycleRegistry comprehensive lifecycle
     assert.throws(() => registry.assertCanStart(scope.workflowId), /Workflow cancelled/);
   });
 
+
   await t.test('rejects invalid cancellation request', () => {
     const registry = new WorkflowLifecycleRegistry();
     const scope = createWorkflowScope('session1', 'client1');
@@ -132,6 +133,7 @@ test('Integration & Edge Case: WorkflowLifecycleRegistry comprehensive lifecycle
     assert.equal(registry.requestCancellation({ workflowId: 'wrong-id', sessionId: 'session1', clientId: 'client1' }), undefined);
     assert.equal(registry.requestCancellation({ workflowId: scope.workflowId, sessionId: 'wrong-session', clientId: 'client1' }), undefined);
     assert.equal(registry.requestCancellation({ workflowId: scope.workflowId, sessionId: 'session1', clientId: 'wrong-client' }), undefined);
+    assert.equal(registry.requestCancellation({ sessionId: 'session1', clientId: 'client1' }), undefined);
   });
 
   await t.test('rebinds correctly', () => {

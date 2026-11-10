@@ -12,3 +12,4 @@ browser-session/
 *.key
 gha-creds-*.json
 store/*.zip
+coverage/
