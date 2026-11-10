@@ -605,6 +605,7 @@ test('a stale workflow completion cannot clear the current recovery prompt', () 
   assert.equal(shouldClearStepRecovery(request, { done: true, workflowId: request.workflowId }), true);
 });
 
+
 test('successful completion keeps the workflow open for a late final response but rejects late recovery', () => {
   const workflowId = 'workflow';
   const completed = new Set<string>([workflowId]);
