@@ -1017,13 +1017,14 @@ function upsertStreamingMessage(
   setPendingRoles: React.Dispatch<React.SetStateAction<Record<string, string>>>,
 ): ChatMessage[] {
   if (requestId) {
-    const existingIndex = messages.findIndex((message) => message.requestId === requestId);
-    if (existingIndex !== -1) {
-      const existing = messages[existingIndex];
-      if (!existing.id.endsWith('-streaming')) return messages;
-      const copy = [...messages];
-      copy[existingIndex] = { ...existing, content };
-      return copy;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const existing = messages[i];
+      if (existing.requestId === requestId) {
+        if (!existing.id.endsWith('-streaming')) return messages;
+        const copy = [...messages];
+        copy[i] = { ...existing, content };
+        return copy;
+      }
     }
   }
   const modeRole = consumePendingRole(provider, requestId, pendingRolesRef, setPendingRoles);
@@ -1039,13 +1040,14 @@ function finalizeMessage(
   setPendingRoles: React.Dispatch<React.SetStateAction<Record<string, string>>>,
 ): ChatMessage[] {
   if (requestId) {
-    const existingIndex = messages.findIndex((message) => message.requestId === requestId);
-    if (existingIndex !== -1) {
-      const existing = messages[existingIndex];
-      if (!existing.id.endsWith('-streaming')) return messages;
-      const copy = [...messages];
-      copy[existingIndex] = { ...existing, id: existing.id.replace(/-streaming$/, ''), content };
-      return copy;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const existing = messages[i];
+      if (existing.requestId === requestId) {
+        if (!existing.id.endsWith('-streaming')) return messages;
+        const copy = [...messages];
+        copy[i] = { ...existing, id: existing.id.replace(/-streaming$/, ''), content };
+        return copy;
+      }
     }
   }
   const modeRole = consumePendingRole(provider, requestId, pendingRolesRef, setPendingRoles);

@@ -10,15 +10,32 @@ export function buildConversationReplayContext(
   messages: readonly ChatMessage[],
   options: { includeAssistant?: boolean } = {},
 ): string | undefined {
-  const replayable = messages
-    .map((message, index) => ({ message, index }))
-    .filter(({ message }) => isReplayableMessage(message));
-  // A Roundtable turn can produce twenty AI replies. Reserve the bounded replay
-  // for user instructions first, so those replies cannot erase the user's task.
-  const users = replayable.filter(({ message }) => message.role === 'user').slice(-MAX_REPLAY_MESSAGES);
-  const assistants = options.includeAssistant === false || users.length === MAX_REPLAY_MESSAGES
-    ? []
-    : replayable.filter(({ message }) => message.role === 'ai').slice(-(MAX_REPLAY_MESSAGES - users.length));
+  let users: { message: ChatMessage; index: number }[] = [];
+  let assistants: { message: ChatMessage; index: number }[] = [];
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (isReplayableMessage(message)) {
+      if (message.role === 'user') {
+        if (users.length < MAX_REPLAY_MESSAGES) {
+          users.push({ message, index: i });
+        }
+      } else if (message.role === 'ai') {
+        if (options.includeAssistant !== false) {
+          assistants.push({ message, index: i });
+        }
+      }
+    }
+  }
+
+  users = users.reverse();
+  const allowedAssistantsCount = MAX_REPLAY_MESSAGES - users.length;
+  if (allowedAssistantsCount > 0) {
+     assistants = assistants.slice(0, allowedAssistantsCount).reverse();
+  } else {
+     assistants = [];
+  }
+
   const entries = [...users, ...assistants]
     .sort((left, right) => left.index - right.index)
     .map(({ message }) => ({ role: message.role, text: replayEntry(message) }));

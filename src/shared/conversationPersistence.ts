@@ -141,25 +141,41 @@ export function payloadFromInputs(
 }
 
 export function fitConversationsForStorage(conversations: Conversation[]): Conversation[] {
+  if (conversations.length === 0) return [];
   const persisted = [...conversations];
   const encoder = new TextEncoder();
 
-  let currentSize = encoder.encode(JSON.stringify(persisted)).byteLength;
+  let currentSize = 2; // []
+
+  const sizes = persisted.map(c => {
+    const size = encoder.encode(JSON.stringify(c)).byteLength;
+    currentSize += size + 1; // +1 for comma
+    return size;
+  });
+  if (sizes.length > 0) currentSize -= 1; // remove trailing comma
+
   while (persisted.length > 1 && currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
-    const removed = persisted.pop();
-    currentSize -= encoder.encode(JSON.stringify(removed)).byteLength + 1; // +1 for the comma (approximate)
+    persisted.pop();
+    const removedSize = sizes.pop()!;
+    currentSize -= (removedSize + 1); // remove item + comma
   }
 
-  if (persisted.length === 1) {
-    currentSize = encoder.encode(JSON.stringify(persisted)).byteLength;
-    if (currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
-      const conversation = { ...persisted[0], messages: [...persisted[0].messages] };
-      while (conversation.messages.length > 2 && currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
-        const removed = conversation.messages.shift();
-        currentSize -= encoder.encode(JSON.stringify(removed)).byteLength + 1;
-      }
-      persisted[0] = conversation;
+  if (persisted.length === 1 && currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
+    const conversation = { ...persisted[0], messages: [...persisted[0].messages] };
+
+    // We need to remove messages
+    const baseSize = encoder.encode(JSON.stringify({ ...conversation, messages: [] })).byteLength;
+    currentSize = baseSize + 2; // base size array wrap (approximate)
+
+    const msgSizes = conversation.messages.map(m => encoder.encode(JSON.stringify(m)).byteLength);
+    currentSize += msgSizes.reduce((a,b) => a+b+1, 0) - (msgSizes.length > 0 ? 1 : 0);
+
+    while (conversation.messages.length > 2 && currentSize > MAX_CONVERSATION_STORAGE_BYTES) {
+      conversation.messages.shift();
+      const removedSize = msgSizes.shift()!;
+      currentSize -= (removedSize + 1);
     }
+    persisted[0] = conversation;
   }
   return persisted;
 }
@@ -212,9 +228,18 @@ export function createConversationPersister(options: {
 }
 
 function sameConversationContent(existing: Conversation, next: Conversation): boolean {
-  return existing.title === next.title
-    && existing.mode === next.mode
-    && JSON.stringify(existing.roles) === JSON.stringify(next.roles)
-    && JSON.stringify(existing.messages) === JSON.stringify(next.messages)
-    && JSON.stringify(existing.providerUrls ?? {}) === JSON.stringify(next.providerUrls ?? {});
+  if (existing.title !== next.title || existing.mode !== next.mode) return false;
+
+  if (existing.roles !== next.roles && JSON.stringify(existing.roles) !== JSON.stringify(next.roles)) return false;
+
+  if (existing.providerUrls !== next.providerUrls && JSON.stringify(existing.providerUrls ?? {}) !== JSON.stringify(next.providerUrls ?? {})) return false;
+
+  if (existing.messages !== next.messages) {
+    if (existing.messages?.length !== next.messages?.length) return false;
+    for (let i = 0; i < (existing.messages?.length || 0); i++) {
+      if (existing.messages![i] !== next.messages![i] && JSON.stringify(existing.messages![i]) !== JSON.stringify(next.messages![i])) return false;
+    }
+  }
+
+  return true;
 }
